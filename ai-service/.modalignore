@@ -1,0 +1,28 @@
+# .modalignore — 배포 시 로컬 모델 파일 전송 방지
+# 효과: modal deploy 시 코드만 전송 (수 KB), 30GB+ 모델은 무시
+
+# 로컬 모델 디렉토리 (30GB+)
+model/
+
+# Python 가상환경
+.venv/
+venv/
+
+# 캐시/빌드
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# 출력물
+output/
+
+# 테스트 데이터
+IMG_Data/
+
+# Git
+.git/
+
+# 임시 파일
+*.tmp
+*.log

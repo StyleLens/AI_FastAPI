@@ -1,0 +1,1560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StyleLens V6 — Test Console</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r170/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.170.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.170.0/examples/js/loaders/GLTFLoader.js"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        brand: '#00d4ff',
+        surface: { 900: '#111117', 800: '#1a1a24', 700: '#222230', 600: '#2d2d3d' },
+      }
+    }
+  }
+}
+</script>
+<style>
+  html { scroll-behavior: smooth; }
+  body { background: #111117; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #1a1a24; }
+  ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #666; }
+  .collapse-body { max-height: 0; overflow: hidden; transition: max-height 0.4s cubic-bezier(0.4,0,0.2,1), opacity 0.3s; opacity: 0; }
+  .collapse-body.open { max-height: 12000px; opacity: 1; }
+  .chevron { transition: transform 0.3s; }
+  .chevron.open { transform: rotate(180deg); }
+  .drop-zone { border: 2px dashed #444; transition: all 0.2s; }
+  .drop-zone.drag-over { border-color: #00d4ff; background: rgba(0,212,255,0.05); }
+  .progress-bar-fill { transition: width 0.5s ease-out; }
+  .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+  .tightness-bar { height: 18px; border-radius: 4px; transition: width 0.5s; min-width: 4px; }
+  .quick-btn { transition: all 0.15s; }
+  .quick-btn:hover { transform: translateY(-1px); }
+  .img-preview-cell img { transition: transform 0.2s; cursor: pointer; }
+  .img-preview-cell img:hover { transform: scale(1.05); }
+  #threejs-canvas { width: 100%; height: 500px; border-radius: 8px; overflow: hidden; }
+  .toast { animation: slideIn 0.3s ease-out; }
+  @keyframes slideIn { from { transform: translateX(100%); opacity:0; } to { transform: translateX(0); opacity:1; } }
+  .side-by-side-container { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+</style>
+</head>
+<body class="dark text-gray-200 min-h-screen">
+
+<!-- ============================================================ -->
+<!-- TOAST CONTAINER -->
+<!-- ============================================================ -->
+<div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+<!-- ============================================================ -->
+<!-- HEADER BAR -->
+<!-- ============================================================ -->
+<header class="sticky top-0 z-40 bg-surface-800 border-b border-gray-700/60 px-4 py-3">
+  <div class="max-w-7xl mx-auto flex items-center justify-between flex-wrap gap-2">
+    <!-- Left: Title -->
+    <div class="flex items-center gap-3">
+      <h1 class="text-lg font-bold text-brand tracking-tight">StyleLens V6 &mdash; Test Console</h1>
+      <span id="mode-badge" class="badge bg-blue-600/80 text-white hidden">LOCAL</span>
+    </div>
+    <!-- Center: Status -->
+    <div class="flex items-center gap-3 text-sm">
+      <span id="health-dot" class="w-2.5 h-2.5 rounded-full bg-gray-500 inline-block"></span>
+      <span id="health-text" class="text-gray-400">Checking...</span>
+    </div>
+    <!-- Right: Session -->
+    <div class="flex items-center gap-2 text-sm">
+      <span class="text-gray-500">Session:</span>
+      <code id="session-display" class="text-xs text-gray-300 bg-surface-700 px-2 py-0.5 rounded font-mono max-w-[160px] truncate">none</code>
+      <button id="btn-new-session" onclick="createNewSession()" class="px-3 py-1 bg-surface-600 hover:bg-surface-700 text-gray-300 rounded text-xs font-medium transition">New Session</button>
+    </div>
+  </div>
+</header>
+
+<!-- ============================================================ -->
+<!-- IMG_DATA QUICK-LOAD BAR -->
+<!-- ============================================================ -->
+<div class="sticky top-[57px] z-30 bg-surface-900/95 backdrop-blur border-b border-gray-700/40 px-4 py-2">
+  <div class="max-w-7xl mx-auto">
+    <div class="flex items-center gap-2 mb-1">
+      <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Quick Load (IMG_Data)</span>
+      <button onclick="loadTestDataList()" class="text-xs text-brand hover:underline">[Refresh]</button>
+    </div>
+    <div id="quick-load-bar" class="flex flex-wrap gap-1.5 text-xs">
+      <span class="text-gray-500 italic">Loading test data...</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- MAIN CONTENT -->
+<!-- ============================================================ -->
+<main class="max-w-7xl mx-auto px-4 py-6 space-y-4">
+
+  <!-- ========== SECTION 1: PHASE 1 — AVATAR ========== -->
+  <section class="bg-surface-800 rounded-lg border border-gray-700/50 overflow-hidden" id="section-phase1">
+    <button onclick="toggleSection('phase1')" class="w-full flex items-center justify-between px-5 py-3.5 hover:bg-surface-700/40 transition text-left">
+      <div class="flex items-center gap-3">
+        <span id="phase1-status-icon" class="text-lg">&#9898;</span>
+        <h2 class="text-base font-semibold text-white">Phase 1 &mdash; Avatar Generation</h2>
+        <span id="phase1-badge" class="badge bg-gray-600/60 text-gray-300 hidden">Done</span>
+      </div>
+      <svg id="chevron-phase1" class="chevron open w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+    </button>
+    <div id="body-phase1" class="collapse-body open px-5 pb-5">
+      <!-- Input -->
+      <div class="grid md:grid-cols-2 gap-4 mb-4">
+        <!-- File upload -->
+        <div>
+          <label class="block text-xs text-gray-400 mb-1 font-medium">Video / Image File</label>
+          <div id="drop-zone-phase1" class="drop-zone rounded-lg p-6 text-center cursor-pointer" onclick="document.getElementById('avatar-file').click()" ondrop="handleDrop(event,'avatar-file','drop-zone-phase1')" ondragover="handleDragOver(event,'drop-zone-phase1')" ondragleave="handleDragLeave(event,'drop-zone-phase1')">
+            <input type="file" id="avatar-file" accept="video/*,image/*" class="hidden" onchange="onAvatarFileChange(this)">
+            <p class="text-gray-500 text-sm">Drop file here or click to select</p>
+            <p id="avatar-file-name" class="text-gray-300 text-sm mt-1 hidden"></p>
+            <img id="avatar-file-preview" class="mt-2 max-h-32 mx-auto rounded hidden">
+          </div>
+        </div>
+        <!-- Metadata -->
+        <div class="space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Gender</label>
+              <select id="avatar-gender" class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-sm">
+                <option value="female">Female</option>
+                <option value="male">Male</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Body Type</label>
+              <select id="avatar-body-type" class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-sm">
+                <option value="standard">Standard</option>
+                <option value="slim">Slim</option>
+                <option value="athletic">Athletic</option>
+                <option value="curvy">Curvy</option>
+                <option value="plus">Plus</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Height (cm)</label>
+              <input type="number" id="avatar-height" value="170" class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Weight (kg)</label>
+              <input type="number" id="avatar-weight" value="65" class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Bust Cup</label>
+              <select id="avatar-cup" class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-sm">
+                <option value="">N/A</option>
+                <option>A</option><option>B</option><option>C</option><option>D</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Action -->
+      <div class="flex items-center gap-3">
+        <button id="btn-phase1" onclick="runPhase1()" disabled class="px-5 py-2.5 bg-brand text-black font-semibold rounded-lg hover:bg-cyan-400 disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed transition text-sm">Generate Avatar</button>
+        <span id="phase1-elapsed" class="text-xs text-gray-500 hidden"></span>
+      </div>
+      <!-- Progress -->
+      <div id="phase1-progress-wrap" class="mt-3 hidden">
+        <div class="flex items-center justify-between text-xs text-gray-400 mb-1">
+          <span id="phase1-progress-label">Processing...</span>
+          <span id="phase1-progress-pct">0%</span>
+        </div>
+        <div class="w-full bg-surface-600 rounded-full h-2"><div id="phase1-progress-bar" class="progress-bar-fill bg-brand h-2 rounded-full" style="width:0%"></div></div>
+      </div>
+      <!-- Error -->
+      <div id="phase1-error" class="mt-3 hidden bg-red-900/30 border border-red-700/50 text-red-300 text-sm rounded-lg px-4 py-3"></div>
+      <!-- Results -->
+      <div id="phase1-results" class="mt-4 hidden">
+        <div class="flex items-center gap-3 mb-3">
+          <h3 class="text-sm font-semibold text-white">Mesh Renders (8 Angles)</h3>
+          <span id="phase1-vertex-count" class="badge bg-surface-600 text-gray-300"></span>
+          <button id="btn-download-avatar-glb" onclick="downloadAvatarGLB()" class="ml-auto px-3 py-1 bg-surface-600 hover:bg-surface-700 text-gray-300 rounded text-xs font-medium transition flex items-center gap-1">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span id="avatar-glb-size">Download GLB</span>
+          </button>
+        </div>
+        <div id="phase1-renders" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
+        <!-- Quality Gates -->
+        <div id="phase1-gates-wrap" class="mt-4 hidden">
+          <h4 class="text-xs font-semibold text-gray-400 uppercase mb-2">Quality Gates</h4>
+          <div id="phase1-gates" class="space-y-1"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== SECTION 2: PHASE 2 — WARDROBE ========== -->
+  <section class="bg-surface-800 rounded-lg border border-gray-700/50 overflow-hidden" id="section-phase2">
+    <button onclick="toggleSection('phase2')" class="w-full flex items-center justify-between px-5 py-3.5 hover:bg-surface-700/40 transition text-left">
+      <div class="flex items-center gap-3">
+        <span id="phase2-status-icon" class="text-lg">&#9898;</span>
+        <h2 class="text-base font-semibold text-white">Phase 2 &mdash; Wardrobe Analysis</h2>
+        <span id="phase2-badge" class="badge bg-gray-600/60 text-gray-300 hidden">Done</span>
+      </div>
+      <svg id="chevron-phase2" class="chevron w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+    </button>
+    <div id="body-phase2" class="collapse-body px-5 pb-5">
+      <div class="grid md:grid-cols-2 gap-4 mb-4">
+        <!-- Clothing images -->
+        <div>
+          <label class="block text-xs text-gray-400 mb-1 font-medium">Clothing Images (1-10)</label>
+          <div id="drop-zone-phase2" class="drop-zone rounded-lg p-6 text-center cursor-pointer" onclick="document.getElementById('wardrobe-images').click()" ondrop="handleDropMulti(event,'wardrobe-images','drop-zone-phase2')" ondragover="handleDragOver(event,'drop-zone-phase2')" ondragleave="handleDragLeave(event,'drop-zone-phase2')">
+            <input type="file" id="wardrobe-images" accept="image/*" multiple class="hidden" onchange="onWardrobeFilesChange(this)">
+            <p class="text-gray-500 text-sm">Drop clothing images or click to select</p>
+            <div id="wardrobe-file-list" class="mt-2 text-xs text-gray-300 hidden"></div>
+          </div>
+          <div id="wardrobe-thumb-row" class="flex gap-1 mt-2 flex-wrap"></div>
+        </div>
+        <!-- Optional extras -->
+        <div class="space-y-3">
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Size Chart (optional)</label>
+            <input type="file" id="wardrobe-sizechart" accept="image/*" class="w-full bg-surface-700 border border-gray-600 rounded text-sm file:mr-3 file:py-1.5 file:px-3 file:border-0 file:bg-surface-600 file:text-gray-300 file:text-xs file:font-medium file:cursor-pointer">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Product Info 1</label>
+              <input type="file" id="wardrobe-product1" accept="image/*" class="w-full bg-surface-700 border border-gray-600 rounded text-sm file:mr-3 file:py-1.5 file:px-3 file:border-0 file:bg-surface-600 file:text-gray-300 file:text-xs file:font-medium file:cursor-pointer">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Product Info 2</label>
+              <input type="file" id="wardrobe-product2" accept="image/*" class="w-full bg-surface-700 border border-gray-600 rounded text-sm file:mr-3 file:py-1.5 file:px-3 file:border-0 file:bg-surface-600 file:text-gray-300 file:text-xs file:font-medium file:cursor-pointer">
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Fitting Model Photo (optional)</label>
+            <input type="file" id="wardrobe-fittingmodel" accept="image/*" class="w-full bg-surface-700 border border-gray-600 rounded text-sm file:mr-3 file:py-1.5 file:px-3 file:border-0 file:bg-surface-600 file:text-gray-300 file:text-xs file:font-medium file:cursor-pointer">
+          </div>
+        </div>
+      </div>
+      <!-- Action -->
+      <div class="flex items-center gap-3">
+        <button id="btn-phase2" onclick="runPhase2()" disabled class="px-5 py-2.5 bg-brand text-black font-semibold rounded-lg hover:bg-cyan-400 disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed transition text-sm">Analyze Clothing</button>
+        <span id="phase2-elapsed" class="text-xs text-gray-500 hidden"></span>
+      </div>
+      <!-- Progress -->
+      <div id="phase2-progress-wrap" class="mt-3 hidden">
+        <div class="flex items-center justify-between text-xs text-gray-400 mb-1">
+          <span id="phase2-progress-label">Analyzing...</span>
+          <span id="phase2-progress-pct">0%</span>
+        </div>
+        <div class="w-full bg-surface-600 rounded-full h-2"><div id="phase2-progress-bar" class="progress-bar-fill bg-brand h-2 rounded-full" style="width:0%"></div></div>
+      </div>
+      <div id="phase2-error" class="mt-3 hidden bg-red-900/30 border border-red-700/50 text-red-300 text-sm rounded-lg px-4 py-3"></div>
+      <!-- Results -->
+      <div id="phase2-results" class="mt-4 hidden">
+        <!-- Clothing card -->
+        <div class="bg-surface-700 rounded-lg p-4 mb-3">
+          <div class="flex items-start gap-4">
+            <div class="flex-1">
+              <div class="flex items-center gap-2 mb-2">
+                <h3 id="clothing-name" class="text-sm font-semibold text-white"></h3>
+                <span id="clothing-category" class="badge bg-brand/20 text-brand text-[10px]"></span>
+                <span id="clothing-subcategory" class="badge bg-gray-600/60 text-gray-300 text-[10px]"></span>
+              </div>
+              <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+                <div><span class="text-gray-500">Color:</span> <span id="clothing-color" class="text-gray-200"></span> <span id="clothing-color-swatch" class="inline-block w-3 h-3 rounded-sm ml-1 align-middle border border-gray-600"></span></div>
+                <div><span class="text-gray-500">Pattern:</span> <span id="clothing-pattern" class="text-gray-200"></span></div>
+                <div><span class="text-gray-500">Fabric:</span> <span id="clothing-fabric" class="text-gray-200"></span></div>
+                <div><span class="text-gray-500">Fit Style:</span> <span id="clothing-fit" class="text-gray-200"></span></div>
+                <div><span class="text-gray-500">Sleeve:</span> <span id="clothing-sleeve" class="text-gray-200"></span></div>
+                <div><span class="text-gray-500">Neckline:</span> <span id="clothing-neckline" class="text-gray-200"></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- Size chart / product info / fitting model -->
+        <div id="phase2-extras" class="grid md:grid-cols-3 gap-3 mb-3 hidden">
+          <div id="phase2-sizechart-data" class="bg-surface-700 rounded-lg p-3 hidden">
+            <h4 class="text-xs font-semibold text-gray-400 uppercase mb-1">Size Chart Data</h4>
+            <pre id="phase2-sizechart-json" class="text-xs text-gray-300 overflow-auto max-h-40 font-mono"></pre>
+          </div>
+          <div id="phase2-product-data" class="bg-surface-700 rounded-lg p-3 hidden">
+            <h4 class="text-xs font-semibold text-gray-400 uppercase mb-1">Product Info</h4>
+            <pre id="phase2-product-json" class="text-xs text-gray-300 overflow-auto max-h-40 font-mono"></pre>
+          </div>
+          <div id="phase2-fittingmodel-data" class="bg-surface-700 rounded-lg p-3 hidden">
+            <h4 class="text-xs font-semibold text-gray-400 uppercase mb-1">Fitting Model Info</h4>
+            <pre id="phase2-fittingmodel-json" class="text-xs text-gray-300 overflow-auto max-h-40 font-mono"></pre>
+          </div>
+        </div>
+        <!-- Full JSON toggle -->
+        <details class="mb-3">
+          <summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-200 transition">Full Analysis JSON (40+ fields)</summary>
+          <pre id="phase2-full-json" class="mt-2 bg-surface-900 rounded p-3 text-xs text-gray-300 font-mono overflow-auto max-h-80"></pre>
+        </details>
+        <!-- Quality Gates -->
+        <div id="phase2-gates-wrap" class="hidden">
+          <h4 class="text-xs font-semibold text-gray-400 uppercase mb-2">Quality Gates</h4>
+          <div id="phase2-gates" class="space-y-1"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== SECTION 2.5: FACE BANK ========== -->
+  <section class="bg-surface-800 rounded-lg border border-gray-700/50 overflow-hidden" id="section-facebank">
+    <button onclick="toggleSection('facebank')" class="w-full flex items-center justify-between px-5 py-3.5 hover:bg-surface-700/40 transition text-left">
+      <div class="flex items-center gap-3">
+        <span id="facebank-status-icon" class="text-lg">&#9898;</span>
+        <h2 class="text-base font-semibold text-white">Face Bank &mdash; Multi-Reference Identity</h2>
+        <span id="facebank-badge" class="badge bg-gray-600/60 text-gray-300 hidden">Done</span>
+      </div>
+      <svg id="chevron-facebank" class="chevron w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+    </button>
+    <div id="body-facebank" class="collapse-body px-5 pb-5">
+      <p class="text-xs text-gray-400 mb-3">Upload 1 current + up to 10 past face photos for consistent identity across all angles. (Optional — single face photo in Phase 3 also works.)</p>
+      <!-- Current Photo -->
+      <div class="mb-3">
+        <label class="block text-xs text-gray-400 mb-1 font-medium">Current Photo (required)</label>
+        <input type="file" id="facebank-current" accept="image/*" class="w-full bg-surface-700 border border-gray-600 rounded text-sm file:mr-3 file:py-1.5 file:px-3 file:border-0 file:bg-surface-600 file:text-gray-300 file:text-xs file:font-medium file:cursor-pointer">
+      </div>
+      <!-- Past Photos -->
+      <div class="mb-3">
+        <label class="block text-xs text-gray-400 mb-1 font-medium">Past Photos (up to 10)</label>
+        <input type="file" id="facebank-past" accept="image/*" multiple class="w-full bg-surface-700 border border-gray-600 rounded text-sm file:mr-3 file:py-1.5 file:px-3 file:border-0 file:bg-surface-600 file:text-gray-300 file:text-xs file:font-medium file:cursor-pointer">
+      </div>
+      <!-- Preview -->
+      <div id="facebank-preview" class="hidden mb-3">
+        <h4 class="text-xs font-semibold text-gray-400 mb-2">Selected Photos</h4>
+        <div id="facebank-thumbs" class="flex flex-wrap gap-2"></div>
+      </div>
+      <!-- Action -->
+      <div class="flex items-center gap-3">
+        <button id="btn-facebank" onclick="uploadFaceBank()" class="px-5 py-2.5 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-500 disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed transition text-sm">Upload Face Bank</button>
+        <span id="facebank-elapsed" class="text-xs text-gray-500 hidden"></span>
+      </div>
+      <!-- Progress -->
+      <div id="facebank-progress-wrap" class="mt-3 hidden">
+        <div class="flex items-center justify-between text-xs text-gray-400 mb-1">
+          <span>Extracting face embeddings...</span>
+        </div>
+        <div class="w-full bg-surface-600 rounded-full h-2"><div id="facebank-progress-bar" class="progress-bar-fill bg-purple-500 h-2 rounded-full" style="width:0%"></div></div>
+      </div>
+      <div id="facebank-error" class="mt-3 hidden bg-red-900/30 border border-red-700/50 text-red-300 text-sm rounded-lg px-4 py-3"></div>
+      <!-- Results -->
+      <div id="facebank-results" class="mt-4 hidden">
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-surface-700 rounded-lg p-3">
+            <span class="text-xs text-gray-400 block mb-1">Total References</span>
+            <span id="facebank-total" class="text-lg font-bold text-white">0</span>
+          </div>
+          <div class="bg-surface-700 rounded-lg p-3">
+            <span class="text-xs text-gray-400 block mb-1">Detected Gender</span>
+            <span id="facebank-gender" class="text-lg font-bold text-white">-</span>
+          </div>
+        </div>
+        <div class="mt-3">
+          <h4 class="text-xs font-semibold text-gray-400 mb-2">Angle Coverage</h4>
+          <div id="facebank-coverage" class="flex flex-wrap gap-2"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== SECTION 3: PHASE 3 — VIRTUAL TRY-ON ========== -->
+  <section class="bg-surface-800 rounded-lg border border-gray-700/50 overflow-hidden" id="section-phase3">
+    <button onclick="toggleSection('phase3')" class="w-full flex items-center justify-between px-5 py-3.5 hover:bg-surface-700/40 transition text-left">
+      <div class="flex items-center gap-3">
+        <span id="phase3-status-icon" class="text-lg">&#9898;</span>
+        <h2 class="text-base font-semibold text-white">Phase 3 &mdash; Virtual Try-On</h2>
+        <span id="phase3-badge" class="badge bg-gray-600/60 text-gray-300 hidden">Done</span>
+      </div>
+      <svg id="chevron-phase3" class="chevron w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+    </button>
+    <div id="body-phase3" class="collapse-body px-5 pb-5">
+      <!-- Prerequisites -->
+      <div class="flex items-center gap-4 mb-4 text-sm">
+        <span class="text-gray-400">Prerequisites:</span>
+        <span id="prereq-phase1" class="text-red-400">Phase 1 &#10007;</span>
+        <span id="prereq-phase2" class="text-red-400">Phase 2 &#10007;</span>
+      </div>
+      <!-- Input -->
+      <div class="mb-4 max-w-sm">
+        <label class="block text-xs text-gray-400 mb-1 font-medium">Face Photo (optional, for identity preservation)</label>
+        <input type="file" id="fitting-face" accept="image/*" class="w-full bg-surface-700 border border-gray-600 rounded text-sm file:mr-3 file:py-1.5 file:px-3 file:border-0 file:bg-surface-600 file:text-gray-300 file:text-xs file:font-medium file:cursor-pointer">
+      </div>
+      <!-- Action -->
+      <div class="flex items-center gap-3">
+        <button id="btn-phase3" onclick="runPhase3()" disabled class="px-5 py-2.5 bg-brand text-black font-semibold rounded-lg hover:bg-cyan-400 disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed transition text-sm">Generate Try-On</button>
+        <span id="phase3-elapsed" class="text-xs text-gray-500 hidden"></span>
+      </div>
+      <!-- Progress -->
+      <div id="phase3-progress-wrap" class="mt-3 hidden">
+        <div class="flex items-center justify-between text-xs text-gray-400 mb-1">
+          <span id="phase3-progress-label">Generating 8-angle try-on...</span>
+          <span id="phase3-progress-pct">0%</span>
+        </div>
+        <div class="w-full bg-surface-600 rounded-full h-2"><div id="phase3-progress-bar" class="progress-bar-fill bg-brand h-2 rounded-full" style="width:0%"></div></div>
+      </div>
+      <div id="phase3-error" class="mt-3 hidden bg-red-900/30 border border-red-700/50 text-red-300 text-sm rounded-lg px-4 py-3"></div>
+      <!-- Results -->
+      <div id="phase3-results" class="mt-4 hidden">
+        <div class="flex items-center gap-3 mb-3">
+          <h3 class="text-sm font-semibold text-white">Try-On Results (8 Angles)</h3>
+          <button id="btn-compare-toggle" onclick="toggleCompareMode()" class="px-3 py-1 bg-surface-600 hover:bg-surface-700 text-gray-300 rounded text-xs font-medium transition">Side-by-Side Compare</button>
+        </div>
+        <div id="phase3-renders" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
+        <div id="phase3-compare" class="hidden grid grid-cols-2 md:grid-cols-4 gap-2 mt-3"></div>
+        <!-- P2P Physics -->
+        <div id="phase3-p2p-panel" class="mt-4 bg-surface-700 rounded-lg p-4 hidden">
+          <h4 class="text-sm font-semibold text-white mb-3">P2P Physics Analysis</h4>
+          <div id="p2p-physics-prompt" class="bg-surface-900 rounded p-3 text-xs text-gray-300 font-mono mb-3 max-h-24 overflow-auto"></div>
+          <div class="flex items-center gap-4 mb-3">
+            <div>
+              <span class="text-xs text-gray-400">Overall Tightness:</span>
+              <span id="p2p-overall-badge" class="badge ml-1"></span>
+            </div>
+            <div>
+              <span class="text-xs text-gray-400">Confidence:</span>
+              <span id="p2p-confidence" class="text-xs text-gray-200 ml-1"></span>
+            </div>
+            <div>
+              <span class="text-xs text-gray-400">Method:</span>
+              <span id="p2p-method" class="text-xs text-gray-200 ml-1"></span>
+            </div>
+          </div>
+          <div id="p2p-body-parts" class="space-y-2"></div>
+        </div>
+        <!-- Quality Gates -->
+        <div id="phase3-gates-wrap" class="mt-4 hidden">
+          <h4 class="text-xs font-semibold text-gray-400 uppercase mb-2">Quality Gates</h4>
+          <div id="phase3-gates" class="space-y-1"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== SECTION 4: PHASE 4 — 3D VIEWER ========== -->
+  <section class="bg-surface-800 rounded-lg border border-gray-700/50 overflow-hidden" id="section-phase4">
+    <button onclick="toggleSection('phase4')" class="w-full flex items-center justify-between px-5 py-3.5 hover:bg-surface-700/40 transition text-left">
+      <div class="flex items-center gap-3">
+        <span id="phase4-status-icon" class="text-lg">&#9898;</span>
+        <h2 class="text-base font-semibold text-white">Phase 4 &mdash; 3D Viewer (Hunyuan3D)</h2>
+        <span id="phase4-badge" class="badge bg-gray-600/60 text-gray-300 hidden">Done</span>
+      </div>
+      <svg id="chevron-phase4" class="chevron w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+    </button>
+    <div id="body-phase4" class="collapse-body px-5 pb-5">
+      <!-- Prerequisites -->
+      <div class="flex items-center gap-4 mb-4 text-sm">
+        <span class="text-gray-400">Prerequisites:</span>
+        <span id="prereq3-phase3" class="text-red-400">Phase 3 &#10007;</span>
+      </div>
+      <!-- Action -->
+      <div class="flex items-center gap-3">
+        <button id="btn-phase4" onclick="runPhase4()" disabled class="px-5 py-2.5 bg-brand text-black font-semibold rounded-lg hover:bg-cyan-400 disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed transition text-sm">Generate 3D Model</button>
+        <label class="flex items-center gap-1.5 text-xs text-gray-400">
+          <input type="checkbox" id="auto-rotate-toggle" checked class="rounded bg-surface-600 border-gray-500"> Auto-rotate
+        </label>
+        <span id="phase4-elapsed" class="text-xs text-gray-500 hidden"></span>
+      </div>
+      <!-- Progress -->
+      <div id="phase4-progress-wrap" class="mt-3 hidden">
+        <div class="flex items-center justify-between text-xs text-gray-400 mb-1">
+          <span id="phase4-progress-label">Generating 3D model...</span>
+          <span id="phase4-progress-pct">0%</span>
+        </div>
+        <div class="w-full bg-surface-600 rounded-full h-2"><div id="phase4-progress-bar" class="progress-bar-fill bg-brand h-2 rounded-full" style="width:0%"></div></div>
+      </div>
+      <div id="phase4-error" class="mt-3 hidden bg-red-900/30 border border-red-700/50 text-red-300 text-sm rounded-lg px-4 py-3"></div>
+      <!-- Results -->
+      <div id="phase4-results" class="mt-4 hidden">
+        <div class="flex items-center gap-3 mb-3">
+          <h3 class="text-sm font-semibold text-white">3D Viewer</h3>
+          <button id="btn-download-3d-glb" onclick="download3DGLB()" class="ml-auto px-3 py-1 bg-surface-600 hover:bg-surface-700 text-gray-300 rounded text-xs font-medium transition flex items-center gap-1">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span id="viewer3d-glb-size">Download GLB</span>
+          </button>
+        </div>
+        <div id="threejs-canvas" class="bg-surface-900 border border-gray-700/50 mb-3"></div>
+        <p class="text-xs text-gray-500 mb-3">Drag to rotate | Scroll to zoom | Right-click to pan</p>
+        <!-- Preview renders -->
+        <div id="phase4-previews-wrap" class="hidden">
+          <h4 class="text-xs font-semibold text-gray-400 uppercase mb-2">Preview Renders</h4>
+          <div id="phase4-previews" class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3"></div>
+        </div>
+        <!-- Quality Gates -->
+        <div id="phase4-gates-wrap" class="hidden">
+          <h4 class="text-xs font-semibold text-gray-400 uppercase mb-2">Quality Gates</h4>
+          <div id="phase4-gates" class="space-y-1"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== QUALITY SUMMARY BAR ========== -->
+  <section class="bg-surface-800 rounded-lg border border-gray-700/50 p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-sm font-semibold text-white">Quality Summary</h3>
+      <button onclick="refreshQualityReport()" class="text-xs text-brand hover:underline">[Refresh]</button>
+    </div>
+    <div id="quality-summary" class="text-xs text-gray-400">
+      No data yet. Run pipeline phases to see quality report.
+    </div>
+  </section>
+
+</main>
+
+<!-- ============================================================ -->
+<!-- IMAGE LIGHTBOX -->
+<!-- ============================================================ -->
+<div id="lightbox" class="fixed inset-0 z-50 hidden bg-black/80 flex items-center justify-center" onclick="closeLightbox()">
+  <img id="lightbox-img" class="max-w-[90vw] max-h-[90vh] rounded-lg shadow-2xl">
+</div>
+
+<!-- ============================================================ -->
+<!-- JAVASCRIPT -->
+<!-- ============================================================ -->
+<script>
+const API_BASE = '';
+const ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
+const TIGHTNESS_COLORS = {
+  very_loose: { bg: 'bg-blue-500', text: 'text-blue-100', hex: '#3b82f6' },
+  loose:      { bg: 'bg-cyan-500', text: 'text-cyan-100', hex: '#06b6d4' },
+  fitted:     { bg: 'bg-green-500', text: 'text-green-100', hex: '#22c55e' },
+  tight:      { bg: 'bg-orange-500', text: 'text-orange-100', hex: '#f97316' },
+  very_tight:  { bg: 'bg-red-500', text: 'text-red-100', hex: '#ef4444' },
+};
+
+// ── State ──────────────────────────────────────────────────────
+let currentSessionId = localStorage.getItem('stylelens_session_id') || null;
+let phase1Done = false;
+let phase2Done = false;
+let phase3Done = false;
+let phase4Done = false;
+let phase1RenderData = {}; // For side-by-side compare
+let phase3GlbUrl = null;
+let threeRenderer = null;
+let threeScene = null;
+let threeCamera = null;
+let threeControls = null;
+let threeAnimFrame = null;
+let compareMode = false;
+
+// ── Session Management ─────────────────────────────────────────
+async function createNewSession() {
+  // The session is auto-created by the backend on first API call,
+  // but we can generate a UUID client-side and let backend create on demand.
+  currentSessionId = crypto.randomUUID();
+  localStorage.setItem('stylelens_session_id', currentSessionId);
+  document.getElementById('session-display').textContent = currentSessionId.substring(0, 8) + '...';
+  resetAllPhases();
+  showToast('New session created', 'info');
+}
+
+function resetAllPhases() {
+  phase1Done = false; phase2Done = false; phase3Done = false; phase4Done = false;
+  for (const p of ['phase1','phase2','phase3','phase4']) {
+    const icon = document.getElementById(`${p}-status-icon`);
+    icon.innerHTML = '&#9898;'; // white circle
+    const badge = document.getElementById(`${p}-badge`);
+    badge.classList.add('hidden');
+    const results = document.getElementById(`${p}-results`);
+    if (results) results.classList.add('hidden');
+    const error = document.getElementById(`${p}-error`);
+    if (error) error.classList.add('hidden');
+  }
+  updatePrerequisites();
+}
+
+// ── Health Check ───────────────────────────────────────────────
+async function checkHealth() {
+  const dot = document.getElementById('health-dot');
+  const txt = document.getElementById('health-text');
+  const modeBadge = document.getElementById('mode-badge');
+  try {
+    const r = await fetch(API_BASE + '/health');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    dot.className = 'w-2.5 h-2.5 rounded-full bg-green-500 inline-block';
+    const sessInfo = d.sessions ? ` | ${d.sessions.active}/${d.sessions.max} sessions` : '';
+    const workerInfo = d.worker ? ` | Worker: ${d.worker.status}` : '';
+    txt.textContent = `Healthy | Gemini: ${d.gemini ? 'ON' : 'OFF'}${workerInfo}${sessInfo}`;
+    txt.className = 'text-green-400 text-sm';
+    // Mode badge
+    const isDistributed = d.mode === 'distributed';
+    modeBadge.textContent = isDistributed ? 'DISTRIBUTED' : 'LOCAL';
+    modeBadge.className = `badge ${isDistributed ? 'bg-green-600/80' : 'bg-blue-600/80'} text-white`;
+    modeBadge.classList.remove('hidden');
+  } catch (e) {
+    dot.className = 'w-2.5 h-2.5 rounded-full bg-red-500 inline-block';
+    txt.textContent = 'Offline';
+    txt.className = 'text-red-400 text-sm';
+    modeBadge.classList.add('hidden');
+  }
+}
+
+// ── Test Data Quick-Load ───────────────────────────────────────
+async function loadTestDataList() {
+  const bar = document.getElementById('quick-load-bar');
+  try {
+    const r = await fetch(API_BASE + '/test-data/list');
+    if (!r.ok) throw new Error('Failed to load test data list');
+    const d = await r.json();
+    if (d.error) { bar.innerHTML = `<span class="text-yellow-500">${d.error}</span>`; return; }
+    const testData = d.test_data || {};
+    let html = '';
+    const categoryConfig = {
+      User_IMG: { label: 'User Photos', color: 'bg-purple-600/70 hover:bg-purple-500/80', target: 'avatar' },
+      User_VOD: { label: 'User Video', color: 'bg-indigo-600/70 hover:bg-indigo-500/80', target: 'avatar' },
+      WardrobeIMG: { label: 'Wardrobe', color: 'bg-pink-600/70 hover:bg-pink-500/80', target: 'wardrobe' },
+      wear: { label: 'Clothing', color: 'bg-teal-600/70 hover:bg-teal-500/80', target: 'wardrobe' },
+      wearSize: { label: 'Size Charts', color: 'bg-amber-600/70 hover:bg-amber-500/80', target: 'sizechart' },
+    };
+    for (const [cat, files] of Object.entries(testData)) {
+      const cfg = categoryConfig[cat] || { label: cat, color: 'bg-gray-600/70', target: 'other' };
+      html += `<span class="text-gray-500 text-[10px] font-semibold uppercase mr-0.5">${cfg.label}:</span>`;
+      for (const fname of files) {
+        const shortName = fname.length > 20 ? fname.substring(0, 17) + '...' : fname;
+        html += `<button class="quick-btn ${cfg.color} text-white px-2 py-0.5 rounded text-[10px] font-medium" onclick="loadTestFile('${cat}','${encodeURIComponent(fname)}','${cfg.target}')" title="${fname}">${shortName}</button>`;
+      }
+      html += '<span class="mx-1"></span>';
+    }
+    bar.innerHTML = html || '<span class="text-gray-500">No test data found</span>';
+  } catch (e) {
+    bar.innerHTML = `<span class="text-red-400">Error loading test data: ${e.message}</span>`;
+  }
+}
+
+async function loadTestFile(category, encodedFilename, target) {
+  const filename = decodeURIComponent(encodedFilename);
+  try {
+    showToast(`Loading ${filename}...`, 'info');
+    const r = await fetch(`${API_BASE}/test-data/${category}/${encodedFilename}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const blob = await r.blob();
+    const file = new File([blob], filename, { type: blob.type });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+
+    if (target === 'avatar') {
+      document.getElementById('avatar-file').files = dt.files;
+      onAvatarFileChange(document.getElementById('avatar-file'));
+      showToast(`Loaded: ${filename}`, 'success');
+    } else if (target === 'wardrobe') {
+      // Append to existing files
+      const existing = document.getElementById('wardrobe-images');
+      const newDt = new DataTransfer();
+      for (const f of existing.files) newDt.items.add(f);
+      newDt.items.add(file);
+      existing.files = newDt.files;
+      onWardrobeFilesChange(existing);
+      showToast(`Added: ${filename}`, 'success');
+    } else if (target === 'sizechart') {
+      document.getElementById('wardrobe-sizechart').files = dt.files;
+      showToast(`Size chart loaded: ${filename}`, 'success');
+    }
+  } catch (e) {
+    showToast(`Failed to load ${filename}: ${e.message}`, 'error');
+  }
+}
+
+// ── Drag & Drop ────────────────────────────────────────────────
+function handleDragOver(e, zoneId) {
+  e.preventDefault(); e.stopPropagation();
+  document.getElementById(zoneId).classList.add('drag-over');
+}
+function handleDragLeave(e, zoneId) {
+  e.preventDefault(); e.stopPropagation();
+  document.getElementById(zoneId).classList.remove('drag-over');
+}
+function handleDrop(e, inputId, zoneId) {
+  e.preventDefault(); e.stopPropagation();
+  document.getElementById(zoneId).classList.remove('drag-over');
+  const dt = new DataTransfer();
+  if (e.dataTransfer.files.length > 0) {
+    dt.items.add(e.dataTransfer.files[0]);
+    document.getElementById(inputId).files = dt.files;
+    if (inputId === 'avatar-file') onAvatarFileChange(document.getElementById(inputId));
+  }
+}
+function handleDropMulti(e, inputId, zoneId) {
+  e.preventDefault(); e.stopPropagation();
+  document.getElementById(zoneId).classList.remove('drag-over');
+  const input = document.getElementById(inputId);
+  const dt = new DataTransfer();
+  for (const f of input.files) dt.items.add(f);
+  for (const f of e.dataTransfer.files) dt.items.add(f);
+  input.files = dt.files;
+  onWardrobeFilesChange(input);
+}
+
+// ── File Change Handlers ───────────────────────────────────────
+function onAvatarFileChange(input) {
+  const file = input.files[0];
+  const nameEl = document.getElementById('avatar-file-name');
+  const previewEl = document.getElementById('avatar-file-preview');
+  const btn = document.getElementById('btn-phase1');
+  if (file) {
+    nameEl.textContent = file.name;
+    nameEl.classList.remove('hidden');
+    btn.disabled = false;
+    if (file.type.startsWith('image/')) {
+      previewEl.src = URL.createObjectURL(file);
+      previewEl.classList.remove('hidden');
+    } else {
+      previewEl.classList.add('hidden');
+    }
+  } else {
+    nameEl.classList.add('hidden');
+    previewEl.classList.add('hidden');
+    btn.disabled = true;
+  }
+}
+
+function onWardrobeFilesChange(input) {
+  const files = input.files;
+  const listEl = document.getElementById('wardrobe-file-list');
+  const thumbRow = document.getElementById('wardrobe-thumb-row');
+  const btn = document.getElementById('btn-phase2');
+  if (files.length > 0) {
+    listEl.innerHTML = `${files.length} file(s) selected`;
+    listEl.classList.remove('hidden');
+    btn.disabled = false;
+    thumbRow.innerHTML = '';
+    for (let i = 0; i < Math.min(files.length, 6); i++) {
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(files[i]);
+      img.className = 'w-12 h-12 object-cover rounded border border-gray-600';
+      thumbRow.appendChild(img);
+    }
+    if (files.length > 6) {
+      const more = document.createElement('span');
+      more.className = 'text-xs text-gray-500 flex items-center';
+      more.textContent = `+${files.length - 6} more`;
+      thumbRow.appendChild(more);
+    }
+  } else {
+    listEl.classList.add('hidden');
+    btn.disabled = true;
+    thumbRow.innerHTML = '';
+  }
+}
+
+// ── Collapsible Sections ───────────────────────────────────────
+const sectionStates = JSON.parse(localStorage.getItem('stylelens_sections') || '{"phase1":true,"phase2":false,"phase3":false,"phase4":false}');
+
+function toggleSection(id) {
+  const body = document.getElementById('body-' + id);
+  const chevron = document.getElementById('chevron-' + id);
+  const isOpen = body.classList.contains('open');
+  if (isOpen) {
+    body.classList.remove('open');
+    chevron.classList.remove('open');
+    sectionStates[id] = false;
+  } else {
+    body.classList.add('open');
+    chevron.classList.add('open');
+    sectionStates[id] = true;
+  }
+  localStorage.setItem('stylelens_sections', JSON.stringify(sectionStates));
+}
+
+function restoreSections() {
+  for (const [id, open] of Object.entries(sectionStates)) {
+    const body = document.getElementById('body-' + id);
+    const chevron = document.getElementById('chevron-' + id);
+    if (body && chevron) {
+      if (open) { body.classList.add('open'); chevron.classList.add('open'); }
+      else { body.classList.remove('open'); chevron.classList.remove('open'); }
+    }
+  }
+}
+
+// ── Progress Simulation ────────────────────────────────────────
+function showProgress(phase, pct, label) {
+  const wrap = document.getElementById(`${phase}-progress-wrap`);
+  const bar = document.getElementById(`${phase}-progress-bar`);
+  const pctEl = document.getElementById(`${phase}-progress-pct`);
+  const labelEl = document.getElementById(`${phase}-progress-label`);
+  wrap.classList.remove('hidden');
+  bar.style.width = pct + '%';
+  pctEl.textContent = Math.round(pct) + '%';
+  if (label) labelEl.textContent = label;
+}
+
+function hideProgress(phase) {
+  document.getElementById(`${phase}-progress-wrap`).classList.add('hidden');
+}
+
+function showError(phase, message) {
+  const el = document.getElementById(`${phase}-error`);
+  el.textContent = message;
+  el.classList.remove('hidden');
+}
+
+function hideError(phase) {
+  document.getElementById(`${phase}-error`).classList.add('hidden');
+}
+
+// ── Phase Status Icons ─────────────────────────────────────────
+function setPhaseIcon(phase, status) {
+  const icon = document.getElementById(`${phase}-status-icon`);
+  const badge = document.getElementById(`${phase}-badge`);
+  switch(status) {
+    case 'running':
+      icon.innerHTML = '&#128260;'; // arrows
+      badge.classList.add('hidden');
+      break;
+    case 'done':
+      icon.innerHTML = '&#9989;'; // green check
+      badge.textContent = 'Done';
+      badge.className = 'badge bg-green-600/60 text-green-200';
+      badge.classList.remove('hidden');
+      break;
+    case 'error':
+      icon.innerHTML = '&#10060;'; // red X
+      badge.textContent = 'Error';
+      badge.className = 'badge bg-red-600/60 text-red-200';
+      badge.classList.remove('hidden');
+      break;
+    default:
+      icon.innerHTML = '&#9898;';
+      badge.classList.add('hidden');
+  }
+}
+
+// ── Update Prerequisites ───────────────────────────────────────
+function updatePrerequisites() {
+  // Phase 3 prereqs
+  document.getElementById('prereq-phase1').innerHTML = phase1Done ? 'Phase 1 &#10003;' : 'Phase 1 &#10007;';
+  document.getElementById('prereq-phase1').className = phase1Done ? 'text-green-400' : 'text-red-400';
+  document.getElementById('prereq-phase2').innerHTML = phase2Done ? 'Phase 2 &#10003;' : 'Phase 2 &#10007;';
+  document.getElementById('prereq-phase2').className = phase2Done ? 'text-green-400' : 'text-red-400';
+  document.getElementById('btn-phase3').disabled = !(phase1Done && phase2Done);
+  // Phase 4 prereqs
+  document.getElementById('prereq3-phase3').innerHTML = phase3Done ? 'Phase 3 &#10003;' : 'Phase 3 &#10007;';
+  document.getElementById('prereq3-phase3').className = phase3Done ? 'text-green-400' : 'text-red-400';
+  document.getElementById('btn-phase4').disabled = !phase3Done;
+}
+
+// ── Quality Gates Renderer ─────────────────────────────────────
+function renderGates(containerId, gates) {
+  const el = document.getElementById(containerId);
+  const wrap = document.getElementById(containerId + '-wrap');
+  if (!gates || gates.length === 0) { if (wrap) wrap.classList.add('hidden'); return; }
+  if (wrap) wrap.classList.remove('hidden');
+  el.innerHTML = gates.map(g => {
+    const score = g.score ?? 0;
+    const pct = (score * 100).toFixed(0);
+    let color = 'bg-red-500';
+    let textColor = 'text-red-300';
+    if (score >= 0.8) { color = 'bg-green-500'; textColor = 'text-green-300'; }
+    else if (score >= 0.5) { color = 'bg-yellow-500'; textColor = 'text-yellow-300'; }
+    return `<div class="flex items-center gap-2 text-xs">
+      <div class="w-2 h-2 rounded-full ${color}"></div>
+      <span class="text-gray-300 w-40 truncate">${g.stage}</span>
+      <div class="flex-1 bg-surface-600 rounded-full h-1.5 max-w-[200px]"><div class="${color} h-1.5 rounded-full" style="width:${pct}%"></div></div>
+      <span class="${textColor} font-mono w-10 text-right">${pct}%</span>
+      <span class="text-xs">${g.pass ? '&#9989;' : '&#10060;'}</span>
+      ${g.feedback ? `<span class="text-gray-500 truncate max-w-[200px]" title="${g.feedback}">${g.feedback}</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// ── Render image grid ──────────────────────────────────────────
+function renderImageGrid(containerId, images, methods) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = '';
+  for (const angle of ANGLES) {
+    const b64 = images[String(angle)];
+    if (!b64) continue;
+    const method = methods ? (methods[String(angle)] || '') : '';
+    const div = document.createElement('div');
+    div.className = 'img-preview-cell';
+    div.innerHTML = `
+      <img src="data:image/jpeg;base64,${b64}" class="w-full rounded border border-gray-700" onclick="openLightbox(this.src)" alt="${angle} degrees">
+      <div class="text-center text-[10px] text-gray-400 mt-0.5">${angle}&deg;</div>
+      ${method ? `<div class="text-center text-[9px] text-brand">${method}</div>` : ''}
+    `;
+    el.appendChild(div);
+  }
+}
+
+// ── Phase 1: Avatar ────────────────────────────────────────────
+async function runPhase1() {
+  const file = document.getElementById('avatar-file').files[0];
+  if (!file) { showToast('Select a video or image file', 'error'); return; }
+  if (!currentSessionId) await createNewSession();
+
+  hideError('phase1');
+  document.getElementById('phase1-results').classList.add('hidden');
+  setPhaseIcon('phase1', 'running');
+
+  const fd = new FormData();
+  fd.append(file.type.startsWith('video') ? 'video' : 'image', file);
+  fd.append('gender', document.getElementById('avatar-gender').value);
+  fd.append('height_cm', document.getElementById('avatar-height').value);
+  fd.append('weight_kg', document.getElementById('avatar-weight').value);
+  fd.append('bust_cup', document.getElementById('avatar-cup').value);
+  fd.append('body_type', document.getElementById('avatar-body-type').value);
+
+  const t0 = performance.now();
+  // Simulate progress
+  let pct = 5;
+  showProgress('phase1', pct, 'Uploading...');
+  const progressInterval = setInterval(() => {
+    pct = Math.min(pct + Math.random() * 8, 90);
+    showProgress('phase1', pct, pct < 30 ? 'Uploading...' : pct < 60 ? 'Processing body data...' : 'Generating mesh renders...');
+  }, 800);
+
+  try {
+    const r = await fetch(`${API_BASE}/avatar/generate?session_id=${currentSessionId}`, { method: 'POST', body: fd });
+    clearInterval(progressInterval);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: `HTTP ${r.status}` }));
+      throw new Error(err.detail || JSON.stringify(err));
+    }
+    const d = await r.json();
+
+    // Update session ID if returned from server
+    if (d.session_id) {
+      currentSessionId = d.session_id;
+      localStorage.setItem('stylelens_session_id', currentSessionId);
+      document.getElementById('session-display').textContent = currentSessionId.substring(0, 8) + '...';
+    }
+
+    showProgress('phase1', 100, 'Complete!');
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    document.getElementById('phase1-elapsed').textContent = `${elapsed}s`;
+    document.getElementById('phase1-elapsed').classList.remove('hidden');
+
+    // Renders
+    phase1RenderData = d.renders || {};
+    renderImageGrid('phase1-renders', d.renders || {});
+    document.getElementById('phase1-vertex-count').textContent = `${(d.vertex_count || 0).toLocaleString()} vertices`;
+    document.getElementById('avatar-glb-size').textContent = `Download GLB (${formatBytes(d.glb_size_bytes || 0)})`;
+    document.getElementById('phase1-results').classList.remove('hidden');
+
+    // Quality gates
+    renderGates('phase1-gates', d.quality_gates);
+
+    phase1Done = true;
+    setPhaseIcon('phase1', 'done');
+    updatePrerequisites();
+    showToast('Avatar generated successfully!', 'success');
+    setTimeout(() => hideProgress('phase1'), 2000);
+  } catch (e) {
+    clearInterval(progressInterval);
+    hideProgress('phase1');
+    setPhaseIcon('phase1', 'error');
+    showError('phase1', e.message);
+    showToast('Avatar generation failed', 'error');
+  }
+}
+
+async function downloadAvatarGLB() {
+  if (!currentSessionId) return;
+  window.open(`${API_BASE}/avatar/glb?session_id=${currentSessionId}`, '_blank');
+}
+
+// ── Phase 2: Wardrobe ──────────────────────────────────────────
+async function runPhase2() {
+  const files = document.getElementById('wardrobe-images').files;
+  if (!files.length) { showToast('Select clothing images', 'error'); return; }
+  if (!currentSessionId) await createNewSession();
+
+  hideError('phase2');
+  document.getElementById('phase2-results').classList.add('hidden');
+  setPhaseIcon('phase2', 'running');
+
+  const fd = new FormData();
+  for (const f of files) fd.append('images', f);
+  const sc = document.getElementById('wardrobe-sizechart').files[0];
+  if (sc) fd.append('size_chart', sc);
+  const p1 = document.getElementById('wardrobe-product1').files[0];
+  if (p1) fd.append('product_info_1', p1);
+  const p2 = document.getElementById('wardrobe-product2').files[0];
+  if (p2) fd.append('product_info_2', p2);
+  const fm = document.getElementById('wardrobe-fittingmodel').files[0];
+  if (fm) fd.append('fitting_model', fm);
+
+  const t0 = performance.now();
+  let pct = 5;
+  showProgress('phase2', pct, 'Uploading images...');
+  const progressInterval = setInterval(() => {
+    pct = Math.min(pct + Math.random() * 6, 90);
+    showProgress('phase2', pct, pct < 25 ? 'Uploading images...' : pct < 50 ? 'Segmenting clothing...' : pct < 70 ? 'Parsing garment...' : 'Analyzing with Gemini...');
+  }, 1000);
+
+  try {
+    const r = await fetch(`${API_BASE}/wardrobe/add-images?session_id=${currentSessionId}`, { method: 'POST', body: fd });
+    clearInterval(progressInterval);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: `HTTP ${r.status}` }));
+      throw new Error(err.detail || JSON.stringify(err));
+    }
+    const d = await r.json();
+
+    if (d.session_id) {
+      currentSessionId = d.session_id;
+      localStorage.setItem('stylelens_session_id', currentSessionId);
+      document.getElementById('session-display').textContent = currentSessionId.substring(0, 8) + '...';
+    }
+
+    showProgress('phase2', 100, 'Complete!');
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    document.getElementById('phase2-elapsed').textContent = `${elapsed}s`;
+    document.getElementById('phase2-elapsed').classList.remove('hidden');
+
+    // Populate clothing card
+    const a = d.analysis || {};
+    document.getElementById('clothing-name').textContent = a.name || 'Unknown';
+    document.getElementById('clothing-category').textContent = a.category || '-';
+    document.getElementById('clothing-subcategory').textContent = a.sub_category || a.subcategory || '-';
+    document.getElementById('clothing-color').textContent = a.color_name || a.color || '-';
+    const colorHex = a.color_hex || a.primary_color_hex || '';
+    const swatch = document.getElementById('clothing-color-swatch');
+    if (colorHex) { swatch.style.background = colorHex; swatch.style.display = 'inline-block'; }
+    else { swatch.style.display = 'none'; }
+    document.getElementById('clothing-pattern').textContent = a.pattern || a.pattern_type || '-';
+    document.getElementById('clothing-fabric').textContent = a.fabric || a.fabric_type || '-';
+    document.getElementById('clothing-fit').textContent = a.fit_style || a.fit || '-';
+    document.getElementById('clothing-sleeve').textContent = a.sleeve_length || a.sleeve_type || '-';
+    document.getElementById('clothing-neckline').textContent = a.neckline || a.neckline_type || '-';
+
+    // Full JSON
+    document.getElementById('phase2-full-json').textContent = JSON.stringify(a, null, 2);
+
+    // Extras
+    const extrasWrap = document.getElementById('phase2-extras');
+    let hasExtras = false;
+    if (d.size_chart) {
+      document.getElementById('phase2-sizechart-data').classList.remove('hidden');
+      document.getElementById('phase2-sizechart-json').textContent = JSON.stringify(d.size_chart, null, 2);
+      hasExtras = true;
+    }
+    if (d.product_info) {
+      document.getElementById('phase2-product-data').classList.remove('hidden');
+      document.getElementById('phase2-product-json').textContent = JSON.stringify(d.product_info, null, 2);
+      hasExtras = true;
+    }
+    if (d.fitting_model_info) {
+      document.getElementById('phase2-fittingmodel-data').classList.remove('hidden');
+      document.getElementById('phase2-fittingmodel-json').textContent = JSON.stringify(d.fitting_model_info, null, 2);
+      hasExtras = true;
+    }
+    if (hasExtras) extrasWrap.classList.remove('hidden');
+
+    document.getElementById('phase2-results').classList.remove('hidden');
+    renderGates('phase2-gates', d.quality_gates);
+
+    phase2Done = true;
+    setPhaseIcon('phase2', 'done');
+    updatePrerequisites();
+    showToast('Wardrobe analysis complete!', 'success');
+    setTimeout(() => hideProgress('phase2'), 2000);
+  } catch (e) {
+    clearInterval(progressInterval);
+    hideProgress('phase2');
+    setPhaseIcon('phase2', 'error');
+    showError('phase2', e.message);
+    showToast('Wardrobe analysis failed', 'error');
+  }
+}
+
+// ── Face Bank ─────────────────────────────────────────────────
+let faceBankDone = false;
+
+// Preview thumbnails on file selection
+document.addEventListener('DOMContentLoaded', () => {
+  const currentInput = document.getElementById('facebank-current');
+  const pastInput = document.getElementById('facebank-past');
+  if (currentInput) currentInput.addEventListener('change', previewFaceBankPhotos);
+  if (pastInput) pastInput.addEventListener('change', previewFaceBankPhotos);
+});
+
+function previewFaceBankPhotos() {
+  const current = document.getElementById('facebank-current').files;
+  const past = document.getElementById('facebank-past').files;
+  const thumbsEl = document.getElementById('facebank-thumbs');
+  const previewEl = document.getElementById('facebank-preview');
+  thumbsEl.innerHTML = '';
+  const allFiles = [...current, ...past];
+  if (allFiles.length === 0) { previewEl.classList.add('hidden'); return; }
+  previewEl.classList.remove('hidden');
+  allFiles.forEach((f, i) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const label = i === 0 && current.length > 0 ? 'Current' : `Past ${i < current.length ? i+1 : i - current.length + 1}`;
+      thumbsEl.innerHTML += `<div class="relative"><img src="${e.target.result}" class="w-16 h-16 rounded-lg object-cover border border-gray-600"><span class="absolute -top-1 -right-1 bg-purple-600 text-white text-[9px] px-1 rounded">${label}</span></div>`;
+    };
+    reader.readAsDataURL(f);
+  });
+}
+
+async function uploadFaceBank() {
+  const currentFile = document.getElementById('facebank-current').files[0];
+  if (!currentFile) { showToast('Current photo is required', 'error'); return; }
+  if (!currentSessionId) { showToast('No session active', 'error'); return; }
+
+  const btn = document.getElementById('btn-facebank');
+  const progressWrap = document.getElementById('facebank-progress-wrap');
+  const progressBar = document.getElementById('facebank-progress-bar');
+  const errorEl = document.getElementById('facebank-error');
+  const resultsEl = document.getElementById('facebank-results');
+
+  btn.disabled = true;
+  progressWrap.classList.remove('hidden');
+  errorEl.classList.add('hidden');
+  resultsEl.classList.add('hidden');
+  progressBar.style.width = '30%';
+
+  const form = new FormData();
+  form.append('current_photo', currentFile);
+  const pastFiles = document.getElementById('facebank-past').files;
+  for (let i = 0; i < pastFiles.length; i++) {
+    form.append('past_photos', pastFiles[i]);
+  }
+
+  const t0 = Date.now();
+  try {
+    progressBar.style.width = '60%';
+    const resp = await fetch(`${API_BASE}/face-bank/upload?session_id=${currentSessionId}`, { method: 'POST', body: form });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || 'Face Bank upload failed');
+    }
+    const data = await resp.json();
+    progressBar.style.width = '100%';
+
+    // Update results
+    document.getElementById('facebank-total').textContent = data.total_references || 0;
+    document.getElementById('facebank-gender').textContent = data.gender || '-';
+
+    // Angle coverage badges
+    const covEl = document.getElementById('facebank-coverage');
+    covEl.innerHTML = '';
+    if (data.angle_coverage) {
+      for (const [angle, count] of Object.entries(data.angle_coverage)) {
+        covEl.innerHTML += `<span class="badge ${count > 0 ? 'bg-purple-600/80 text-white' : 'bg-gray-600/60 text-gray-400'}">${angle}: ${count}</span>`;
+      }
+    }
+
+    resultsEl.classList.remove('hidden');
+    faceBankDone = true;
+    document.getElementById('facebank-status-icon').innerHTML = '&#9989;';
+    document.getElementById('facebank-badge').textContent = `${data.total_references} refs`;
+    document.getElementById('facebank-badge').classList.remove('hidden');
+
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    document.getElementById('facebank-elapsed').textContent = `${elapsed}s`;
+    document.getElementById('facebank-elapsed').classList.remove('hidden');
+    showToast(`Face Bank: ${data.total_references} references loaded`, 'success');
+  } catch (e) {
+    errorEl.textContent = e.message;
+    errorEl.classList.remove('hidden');
+    showToast('Face Bank upload failed', 'error');
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => progressWrap.classList.add('hidden'), 1500);
+  }
+}
+
+// ── Phase 3: Fitting ───────────────────────────────────────────
+async function runPhase3() {
+  if (!phase1Done || !phase2Done) { showToast('Complete Phase 1 and Phase 2 first', 'error'); return; }
+  if (!currentSessionId) { showToast('No session active', 'error'); return; }
+
+  hideError('phase3');
+  document.getElementById('phase3-results').classList.add('hidden');
+  setPhaseIcon('phase3', 'running');
+  compareMode = false;
+
+  const fd = new FormData();
+  const face = document.getElementById('fitting-face').files[0];
+  if (face) fd.append('face_photo', face);
+
+  const t0 = performance.now();
+  let pct = 5;
+  showProgress('phase3', pct, 'Starting virtual try-on...');
+  const progressInterval = setInterval(() => {
+    pct = Math.min(pct + Math.random() * 4, 90);
+    showProgress('phase3', pct,
+      pct < 20 ? 'Preparing renders...' :
+      pct < 40 ? 'Generating person masks...' :
+      pct < 70 ? 'Running CatVTON-FLUX (8 angles)...' :
+      'P2P physics analysis...');
+  }, 2000);
+
+  try {
+    const r = await fetch(`${API_BASE}/fitting/try-on?session_id=${currentSessionId}`, { method: 'POST', body: fd });
+    clearInterval(progressInterval);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: `HTTP ${r.status}` }));
+      throw new Error(err.detail || JSON.stringify(err));
+    }
+    const d = await r.json();
+
+    showProgress('phase3', 100, 'Complete!');
+    const elapsed = d.elapsed_sec ? d.elapsed_sec.toFixed(1) : ((performance.now() - t0) / 1000).toFixed(1);
+    document.getElementById('phase3-elapsed').textContent = `${elapsed}s`;
+    document.getElementById('phase3-elapsed').classList.remove('hidden');
+
+    // Render try-on images
+    renderImageGrid('phase3-renders', d.images || {}, d.methods);
+
+    // P2P Panel
+    if (d.p2p) {
+      const panel = document.getElementById('phase3-p2p-panel');
+      panel.classList.remove('hidden');
+      document.getElementById('p2p-physics-prompt').textContent = d.p2p.physics_prompt || '';
+      const tc = TIGHTNESS_COLORS[d.p2p.overall_tightness] || TIGHTNESS_COLORS.fitted;
+      document.getElementById('p2p-overall-badge').textContent = d.p2p.overall_tightness;
+      document.getElementById('p2p-overall-badge').className = `badge ${tc.bg} ${tc.text}`;
+      document.getElementById('p2p-confidence').textContent = d.p2p.confidence ? (d.p2p.confidence * 100).toFixed(0) + '%' : '-';
+      document.getElementById('p2p-method').textContent = d.p2p.method || '-';
+
+      // Body part tightness bars
+      const partsEl = document.getElementById('p2p-body-parts');
+      partsEl.innerHTML = (d.p2p.deltas || []).map(delta => {
+        const dtc = TIGHTNESS_COLORS[delta.tightness] || TIGHTNESS_COLORS.fitted;
+        const absDelta = Math.abs(delta.delta_cm || 0);
+        const barWidth = Math.min(absDelta * 5, 100);
+        return `<div class="flex items-center gap-2 text-xs">
+          <span class="text-gray-300 w-28 truncate">${delta.body_part}</span>
+          <div class="flex-1 bg-surface-600 rounded h-[18px] relative overflow-hidden">
+            <div class="tightness-bar ${dtc.bg}" style="width:${barWidth}%"></div>
+            <span class="absolute inset-0 flex items-center px-2 text-[10px] ${dtc.text} font-medium">${delta.tightness} (${delta.delta_cm > 0 ? '+' : ''}${delta.delta_cm?.toFixed(1)}cm)</span>
+          </div>
+          <span class="text-gray-500 w-32 truncate text-[10px]">${(delta.visual_keywords || []).join(', ')}</span>
+        </div>`;
+      }).join('');
+    } else {
+      document.getElementById('phase3-p2p-panel').classList.add('hidden');
+    }
+
+    document.getElementById('phase3-results').classList.remove('hidden');
+    renderGates('phase3-gates', d.quality_gates);
+
+    // Store for compare mode
+    window._phase3Images = d.images || {};
+    window._phase3Methods = d.methods || {};
+
+    phase3Done = true;
+    setPhaseIcon('phase3', 'done');
+    updatePrerequisites();
+    showToast('Virtual try-on complete!', 'success');
+    setTimeout(() => hideProgress('phase3'), 2000);
+  } catch (e) {
+    clearInterval(progressInterval);
+    hideProgress('phase3');
+    setPhaseIcon('phase3', 'error');
+    showError('phase3', e.message);
+    showToast('Virtual try-on failed', 'error');
+  }
+}
+
+function toggleCompareMode() {
+  compareMode = !compareMode;
+  const compareEl = document.getElementById('phase3-compare');
+  const btn = document.getElementById('btn-compare-toggle');
+  if (compareMode && phase1RenderData && window._phase3Images) {
+    compareEl.classList.remove('hidden');
+    compareEl.innerHTML = '';
+    for (const angle of ANGLES) {
+      const meshB64 = phase1RenderData[String(angle)];
+      const tryonB64 = window._phase3Images[String(angle)];
+      if (!meshB64 && !tryonB64) continue;
+      const div = document.createElement('div');
+      div.innerHTML = `
+        <div class="side-by-side-container">
+          <div>
+            ${meshB64 ? `<img src="data:image/jpeg;base64,${meshB64}" class="w-full rounded border border-gray-700" onclick="openLightbox(this.src)">` : '<div class="w-full h-24 bg-surface-600 rounded flex items-center justify-center text-xs text-gray-500">No mesh</div>'}
+            <div class="text-center text-[9px] text-gray-500">Mesh</div>
+          </div>
+          <div>
+            ${tryonB64 ? `<img src="data:image/jpeg;base64,${tryonB64}" class="w-full rounded border border-gray-700" onclick="openLightbox(this.src)">` : '<div class="w-full h-24 bg-surface-600 rounded flex items-center justify-center text-xs text-gray-500">No try-on</div>'}
+            <div class="text-center text-[9px] text-brand">Try-On</div>
+          </div>
+        </div>
+        <div class="text-center text-[10px] text-gray-400 mt-0.5">${angle}&deg;</div>
+      `;
+      compareEl.appendChild(div);
+    }
+    btn.textContent = 'Hide Compare';
+    btn.classList.add('ring-1', 'ring-brand');
+  } else {
+    compareEl.classList.add('hidden');
+    btn.textContent = 'Side-by-Side Compare';
+    btn.classList.remove('ring-1', 'ring-brand');
+  }
+}
+
+// ── Phase 4: 3D Viewer ─────────────────────────────────────────
+async function runPhase4() {
+  if (!phase3Done) { showToast('Complete Phase 3 first', 'error'); return; }
+  if (!currentSessionId) { showToast('No session active', 'error'); return; }
+
+  hideError('phase4');
+  document.getElementById('phase4-results').classList.add('hidden');
+  setPhaseIcon('phase4', 'running');
+
+  const t0 = performance.now();
+  let pct = 5;
+  showProgress('phase4', pct, 'Initializing Hunyuan3D...');
+  const progressInterval = setInterval(() => {
+    pct = Math.min(pct + Math.random() * 3, 90);
+    showProgress('phase4', pct,
+      pct < 20 ? 'Initializing Hunyuan3D...' :
+      pct < 50 ? 'Shape generation (MV Diffusion)...' :
+      pct < 75 ? 'Paint generation (Texture)...' :
+      'Exporting GLB...');
+  }, 3000);
+
+  try {
+    const r = await fetch(`${API_BASE}/viewer3d/generate?session_id=${currentSessionId}`, { method: 'POST' });
+    clearInterval(progressInterval);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: `HTTP ${r.status}` }));
+      throw new Error(err.detail || JSON.stringify(err));
+    }
+    const d = await r.json();
+
+    showProgress('phase4', 100, 'Complete!');
+    const elapsed = d.elapsed_sec ? d.elapsed_sec.toFixed(1) : ((performance.now() - t0) / 1000).toFixed(1);
+    document.getElementById('phase4-elapsed').textContent = `${elapsed}s`;
+    document.getElementById('phase4-elapsed').classList.remove('hidden');
+
+    // GLB
+    phase3GlbUrl = d.glb_url || null;
+    document.getElementById('viewer3d-glb-size').textContent = `Download GLB (${formatBytes(d.glb_size_bytes || 0)})`;
+
+    // Preview renders
+    if (d.previews && Object.keys(d.previews).length > 0) {
+      renderImageGrid('phase4-previews', d.previews);
+      document.getElementById('phase4-previews-wrap').classList.remove('hidden');
+    }
+
+    document.getElementById('phase4-results').classList.remove('hidden');
+    renderGates('phase4-gates', d.quality_gates);
+
+    // Init Three.js viewer
+    if (phase3GlbUrl) {
+      initThreeViewer(API_BASE + phase3GlbUrl);
+    }
+
+    phase4Done = true;
+    setPhaseIcon('phase4', 'done');
+    showToast('3D model generated!', 'success');
+    setTimeout(() => hideProgress('phase4'), 2000);
+  } catch (e) {
+    clearInterval(progressInterval);
+    hideProgress('phase4');
+    setPhaseIcon('phase4', 'error');
+    showError('phase4', e.message);
+    showToast('3D model generation failed', 'error');
+  }
+}
+
+function download3DGLB() {
+  if (phase3GlbUrl) window.open(API_BASE + phase3GlbUrl, '_blank');
+}
+
+// ── Three.js Viewer ────────────────────────────────────────────
+function initThreeViewer(glbUrl) {
+  const container = document.getElementById('threejs-canvas');
+  container.innerHTML = '';
+
+  // Cleanup previous
+  if (threeAnimFrame) cancelAnimationFrame(threeAnimFrame);
+  if (threeRenderer) threeRenderer.dispose();
+
+  threeScene = new THREE.Scene();
+  threeScene.background = new THREE.Color(0x111117);
+
+  threeCamera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
+  threeCamera.position.set(0, 1, 3);
+
+  threeRenderer = new THREE.WebGLRenderer({ antialias: true });
+  threeRenderer.setSize(container.clientWidth, container.clientHeight);
+  threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  threeRenderer.outputColorSpace = THREE.SRGBColorSpace;
+  threeRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+  threeRenderer.toneMappingExposure = 1.2;
+  container.appendChild(threeRenderer.domElement);
+
+  threeControls = new THREE.OrbitControls(threeCamera, threeRenderer.domElement);
+  threeControls.enableDamping = true;
+  threeControls.dampingFactor = 0.08;
+  threeControls.target.set(0, 0.8, 0);
+  threeControls.autoRotate = document.getElementById('auto-rotate-toggle').checked;
+  threeControls.autoRotateSpeed = 2.0;
+
+  // Grid floor
+  const grid = new THREE.GridHelper(4, 20, 0x333333, 0x222222);
+  threeScene.add(grid);
+
+  // Lighting
+  const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+  threeScene.add(ambient);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+  dirLight.position.set(3, 5, 3);
+  dirLight.castShadow = true;
+  threeScene.add(dirLight);
+  const fillLight = new THREE.DirectionalLight(0xeeeeff, 0.4);
+  fillLight.position.set(-3, 2, -2);
+  threeScene.add(fillLight);
+  const rimLight = new THREE.DirectionalLight(0xffffff, 0.2);
+  rimLight.position.set(0, -1, -3);
+  threeScene.add(rimLight);
+
+  // Load GLB
+  const loader = new THREE.GLTFLoader();
+  loader.load(glbUrl, (gltf) => {
+    const model = gltf.scene;
+    const box = new THREE.Box3().setFromObject(model);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const scale = 2.0 / maxDim;
+    model.scale.multiplyScalar(scale);
+    model.position.sub(center.multiplyScalar(scale));
+    threeScene.add(model);
+  }, undefined, (err) => {
+    console.error('GLB load error:', err);
+    showToast('Failed to load GLB in viewer', 'error');
+  });
+
+  function animate() {
+    threeAnimFrame = requestAnimationFrame(animate);
+    threeControls.autoRotate = document.getElementById('auto-rotate-toggle').checked;
+    threeControls.update();
+    threeRenderer.render(threeScene, threeCamera);
+  }
+  animate();
+
+  // Resize handler
+  const resizeObserver = new ResizeObserver(() => {
+    threeCamera.aspect = container.clientWidth / container.clientHeight;
+    threeCamera.updateProjectionMatrix();
+    threeRenderer.setSize(container.clientWidth, container.clientHeight);
+  });
+  resizeObserver.observe(container);
+}
+
+// ── Quality Report ─────────────────────────────────────────────
+async function refreshQualityReport() {
+  const el = document.getElementById('quality-summary');
+  try {
+    const sid = currentSessionId || 'default';
+    const r = await fetch(`${API_BASE}/quality/report?session_id=${sid}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    if (d.error) { el.innerHTML = `<span class="text-yellow-400">${d.error}</span>`; return; }
+
+    const totalInspections = d.total_inspections ?? 0;
+    const overallScore = d.overall_score ?? 0;
+    const scorePct = (overallScore * 100).toFixed(0);
+    let scoreColor = 'text-red-400';
+    if (overallScore >= 0.8) scoreColor = 'text-green-400';
+    else if (overallScore >= 0.5) scoreColor = 'text-yellow-400';
+
+    let html = `<div class="flex items-center gap-6">
+      <div><span class="text-gray-500">Total Inspections:</span> <span class="text-gray-200 font-semibold">${totalInspections}</span></div>
+      <div><span class="text-gray-500">Overall Score:</span> <span class="${scoreColor} font-semibold">${scorePct}%</span></div>
+    </div>`;
+
+    if (d.stages && Object.keys(d.stages).length > 0) {
+      html += '<div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">';
+      for (const [stage, info] of Object.entries(d.stages)) {
+        const s = info.avg_score ?? info.score ?? 0;
+        const sp = (s * 100).toFixed(0);
+        let sc = 'bg-red-500/20 text-red-300 border-red-700/30';
+        if (s >= 0.8) sc = 'bg-green-500/20 text-green-300 border-green-700/30';
+        else if (s >= 0.5) sc = 'bg-yellow-500/20 text-yellow-300 border-yellow-700/30';
+        html += `<div class="rounded p-2 border ${sc} text-center">
+          <div class="text-[10px] text-gray-400 truncate">${stage}</div>
+          <div class="text-sm font-semibold">${sp}%</div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+  }
+}
+
+// ── Toast Notifications ────────────────────────────────────────
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const colors = {
+    info: 'bg-blue-600/90 text-blue-100',
+    success: 'bg-green-600/90 text-green-100',
+    error: 'bg-red-600/90 text-red-100',
+    warning: 'bg-yellow-600/90 text-yellow-100',
+  };
+  const toast = document.createElement('div');
+  toast.className = `toast ${colors[type] || colors.info} px-4 py-2 rounded-lg text-sm font-medium shadow-lg pointer-events-auto`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transition = 'opacity 0.3s';
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
+// ── Lightbox ───────────────────────────────────────────────────
+function openLightbox(src) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox').classList.remove('hidden');
+  document.getElementById('lightbox').classList.add('flex');
+}
+function closeLightbox() {
+  document.getElementById('lightbox').classList.add('hidden');
+  document.getElementById('lightbox').classList.remove('flex');
+}
+
+// ── Utilities ──────────────────────────────────────────────────
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+// ── Initialization ─────────────────────────────────────────────
+(async function init() {
+  // Restore session
+  if (currentSessionId) {
+    document.getElementById('session-display').textContent = currentSessionId.substring(0, 8) + '...';
+  } else {
+    await createNewSession();
+  }
+
+  // Restore collapsed sections
+  restoreSections();
+
+  // Health check
+  await checkHealth();
+  setInterval(checkHealth, 30000);
+
+  // Load test data
+  await loadTestDataList();
+
+  // Keyboard shortcut: Escape closes lightbox
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeLightbox();
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+# Excluded directories
+AI_Docs/
+IMG_Data/
+model
+
+# Environment
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# ai-service venv & env
+ai-service/.venv/
+ai-service/.env
+ai-service/model
+
+# Output & test data
+output/
+test_data/
+test_image.jpg
+test_person.jpg
+test_video.mp4
+
+# Model files
+*.pt
