@@ -1,213 +1,131 @@
-# StyleLens V6: Distributed 4-Tier AI Architecture for 360° High-Fidelity Virtual Try-On
+# StyleLens AI Server -- 360도 가상 피팅 + 3D 바디 복원 시스템
 
-**StyleLens V6** is a distributed AI pipeline that combines **7 SOTA deep learning models** with **physics-based fit analysis** to deliver photorealistic 360° virtual try-on with full 3D body reconstruction.
+사용자 사진 한 장에서 3D 바디 메쉬를 복원하고, 8개 각도의 가상 피팅 이미지를 생성하는 AI 파이프라인이다.
+4-Tier 분산 아키텍처로 설계되어 있으며, GPU 연산은 Modal 서버리스 인프라에 위임한다.
 
----
 
-## Technical Complexity: 4-Tier Architecture
-
-I have designed and implemented a **Distributed 4-Tier Architecture** to manage the complex computational demands of real-time 3D avatar generation.
+## 아키텍처
 
 ```
-┌─────────────────────────┬────────────────────────────────────────┐
-│  Tier 1 (Frontend)      │  React 19 + Three.js                  │
-│                         │  Interactive 3D GLB visualization      │
-├─────────────────────────┼────────────────────────────────────────┤
-│  Tier 2 (Backend)       │  Spring Boot                          │
-│                         │  JWT auth + S3 data management         │
-├─────────────────────────┼────────────────────────────────────────┤
-│  Tier 3 (Orchestrator)  │  FastAPI AI Brain                     │
-│                         │  P2P physics analysis + scheduling     │
-├─────────────────────────┼────────────────────────────────────────┤
-│  Tier 4 (Worker)        │  Modal GPU (NVIDIA H100 80GB)         │
-│                         │  Serverless SOTA model pipeline        │
-└─────────────────────────┴────────────────────────────────────────┘
+Frontend (React 19 + Three.js)
+    |
+Backend (Spring Boot, JWT/S3)
+    |
+Orchestrator (FastAPI, CPU)        <-- 이 저장소
+    |
+GPU Worker (Modal, H200 141GB)
 ```
 
-- **Tier 1 (Frontend):** React 19 and Three.js for interactive 3D GLB visualization.
-- **Tier 2 (Backend):** Spring Boot for secure user authentication and S3-based data management.
-- **Tier 3 (Orchestrator):** A FastAPI-based AI brain that performs P2P (Physics-to-Prompt) physical analysis and handles worker scheduling.
-- **Tier 4 (Worker):** Serverless GPU nodes on Modal (NVIDIA H100) executing a sequential pipeline of 7 SOTA models.
+Orchestrator는 전체 파이프라인을 조율하는 중앙 컨트롤러 역할을 한다.
+체형 분석, 메쉬 렌더링 등 CPU 작업은 직접 처리하고, SDXL/VTON/Face Swap 등 GPU 작업은 Modal Worker에 위임한다.
 
----
 
-## Resource Requirements: 55GB VRAM
+## 파이프라인 흐름
 
-The StyleLens V6 pipeline is uniquely resource-intensive, requiring a cumulative **55GB of VRAM** for full-stack model residency.
-
-| Stack | Models | VRAM |
-|:------|:-------|-----:|
-| **Vision Stack** | YOLO26-L (detection) + SAM 3 (segmentation) + SAM 3D Body (skeletal reconstruction) | ~12GB |
-| **Generation Stack** | FLUX.1-dev GGUF Q8 (base diffusion) + CatVTON-FLUX (garment transfer) | ~21GB |
-| **Identity & 3D Stack** | InsightFace (facial preservation) + Hunyuan3D 2.0 (PBR texture synthesis) | ~22GB |
-| **Total** | **7 Models** | **~55GB** |
-
-Due to this 55GB VRAM requirement, high-memory GPU nodes like the **NVIDIA H100 (80GB)** are essential to avoid memory fragmentation and latency during model swapping. The Tier 4 worker runs on **Modal serverless GPU infrastructure** with H100 nodes.
-
----
-
-## Research Innovation: Multi-Reference Identity Bank
-
-My research focuses on **"Zero-shot Identity Preservation"** across extreme 360-degree rotations. Unlike standard single-image methods, I am developing a **Multi-Reference Face ID Bank** that utilizes **11+ images** (10 historical + 1 current) to maintain 100% ID consistency in 3D reconstruction. This approach solves the **"identity drift"** problem prevalent in current 3D generative AI.
-
-**Core implementation** (`core/face_bank.py`):
-- Manages up to 11 reference images with InsightFace embedding extraction
-- Classifies face angles and selects optimal references per target angle
-- Cosine similarity-based identity verification across all 8 viewing angles (0° ~ 315°)
-
----
-
-## 4-Phase Pipeline
-
-### Phase 1 — Avatar Generation
-> Person detection + 3D body reconstruction
-
-- **YOLO26-L**: NMS-free single-shot person detection
-- **SAM 3D Body DINOv3**: Single-image to 3D mesh (SMPL vertices, joints, betas)
-- **Gemini Feedback Inspector**: Quality gate validation per stage
-
-### Phase 2 — Wardrobe Analysis
-> Clothing segmentation + physics extraction
-
-- **SAM 3**: Concept-aware clothing segmentation
-- **FASHN Parser**: 18-class fashion body parsing
-- **Gemini Vision**: Size chart OCR + fabric physics inference (elasticity, thickness, texture)
-
-### Phase 3 — Virtual Try-On
-> Physics-aware 8-angle fitting
-
-- **P2P Engine**: Converts physical deltas (garment size - body size) into visual cue keywords
-- **P2P Ensemble**: Multi-strategy fusion with configurable timeout
-- **CatVTON-FLUX**: FLUX-based 8-angle virtual try-on with physics prompt injection
-- **Face Bank**: Multi-reference identity preservation across all angles
-
-### Phase 4 — 3D Visualization
-> Textured 3D model generation
-
-- **Hunyuan3D 2.0**: Multi-view to textured 3D GLB with PBR materials
-- **Software Renderer**: CPU/MPS fallback for mesh preview
-
----
-
-## Tech Stack
-
-| Category | Technology | Role |
-|:---------|:-----------|:-----|
-| **Orchestrator** | FastAPI 0.115+ / Uvicorn | Async API server (Tier 3) |
-| **GPU Worker** | Modal Serverless (H100 80GB) | SOTA model execution (Tier 4) |
-| **Detection** | YOLO26-L | NMS-free person detection |
-| **Segmentation** | SAM 3 + FASHN Parser | Concept-aware seg + 18-class parsing |
-| **3D Body** | SAM 3D Body DINOv3 | Single-image 3D mesh reconstruction |
-| **Try-On** | CatVTON-FLUX + FLUX.1-dev GGUF | High-fidelity virtual garment transfer |
-| **3D Generation** | Hunyuan3D 2.0 | PBR-textured 3D GLB export |
-| **Face Identity** | InsightFace buffalo_l | Multi-reference face embedding |
-| **AI Brain** | Google Gemini | Quality gates + clothing analysis + P2P |
-| **Physics** | P2P Engine / Ensemble | Measurement-based fit prompt injection |
-
----
-
-## Project Structure
-
-```
-ai-service/
-├── orchestrator/                    # Tier 3: FastAPI AI Orchestrator
-│   ├── main.py                      #   App entrypoint + lifespan
-│   ├── config.py                    #   Environment-based configuration
-│   ├── session.py                   #   Pipeline session management
-│   ├── worker_client.py             #   Modal GPU worker RPC client
-│   ├── serialization.py             #   numpy/image <-> base64 codec
-│   └── routes/
-│       ├── avatar.py                #   Phase 1: Avatar generation
-│       ├── wardrobe.py              #   Phase 2: Wardrobe analysis
-│       ├── fitting.py               #   Phase 3: Virtual try-on
-│       ├── viewer3d.py              #   Phase 4: 3D visualization
-│       ├── face_bank.py             #   Face identity management
-│       ├── p2p.py                   #   Physics-to-Prompt analysis
-│       └── quality.py               #   Gemini quality inspection
-├── worker/                          # Tier 4: Modal GPU Worker
-│   ├── modal_app.py                 #   H100 serverless GPU functions
-│   └── serialization.py             #   Worker-side serialization
-├── core/                            # Shared AI Logic
-│   ├── config.py                    #   Model paths + device + constants
-│   ├── loader.py                    #   Lazy model registry
-│   ├── pipeline.py                  #   Phase 1: Avatar pipeline
-│   ├── fitting.py                   #   Phase 3: Fitting pipeline
-│   ├── catvton_pipeline.py          #   CatVTON-FLUX wrapper
-│   ├── p2p_engine.py                #   Physics-to-Prompt engine
-│   ├── p2p_ensemble.py              #   Multi-strategy P2P fusion
-│   ├── face_bank.py                 #   Multi-reference face ID bank
-│   ├── face_identity.py             #   InsightFace integration
-│   ├── gemini_client.py             #   Gemini API client
-│   ├── gemini_feedback.py           #   Quality gate inspector
-│   ├── wardrobe.py                  #   Wardrobe analysis logic
-│   ├── body_deformation.py          #   Mesh deformation
-│   ├── clothing_merger.py           #   Garment mesh merging
-│   ├── image_preprocess.py          #   Image preprocessing
-│   ├── multiview.py                 #   Multi-view rendering
-│   ├── sw_renderer.py               #   Software mesh renderer
-│   └── viewer3d.py                  #   3D viewer pipeline
-├── scripts/
-│   └── upload_models_to_volume.py   # Modal Volume model upload
-├── tests/                           # Unit & integration tests
-├── setup_models.py                  # Interactive model download script
-├── requirements.txt                 # Python dependencies
-└── static/index.html                # Test console UI
+```mermaid
+graph LR
+    A[사용자 사진] --> B[SAM 3D Body]
+    B --> C[CPU 메쉬 렌더링]
+    C --> D[SDXL + ControlNet Depth]
+    D --> E[FLUX.2-klein 리파인]
+    E --> F[FASHN VTON v1.5]
+    F --> G[InsightFace Face Swap]
+    G --> H[8각도 피팅 결과]
 ```
 
----
+| Phase | 설명 | 실행 위치 |
+|-------|------|----------|
+| Phase 1 | SAM 3D Body로 사진에서 3D 메쉬 복원 | GPU Worker |
+| Phase 1R | CPU 소프트웨어 렌더러로 8각도 depth map 생성 | Orchestrator |
+| Phase 1.5A | SDXL + ControlNet Depth로 사실적 인체 이미지 생성 | GPU Worker |
+| Phase 1.5B | FLUX.2-klein-4B img2img 텍스처 리파인 (선택) | GPU Worker |
+| Phase 3 | FASHN VTON v1.5로 의류 가상 착용 | GPU Worker |
+| Phase 4 | InsightFace antelopev2로 얼굴 일관성 유지 | GPU Worker |
+| Phase 5 | P2P(Physics-to-Prompt) 핏 분석 | Orchestrator |
 
-## Quick Start
+
+## 주요 기능
+
+- **360도 가상 피팅**: 8개 각도(0~315도, 45도 간격)에서 의류 착용 이미지를 생성한다.
+- **체형 반영 메쉬 변형**: 컵 사이즈별 가슴 볼륨 조절, 자세 보정, 팔 접기 등을 적용한다.
+- **동적 ControlNet 스케일**: 체형에 따라 cn_scale을 자동 조정하여 VTON 단계에서 실루엣을 보존한다.
+- **얼굴 일관성 유지**: InsightFace 기반 face swap으로 모든 각도에서 동일한 얼굴을 유지한다.
+- **P2P 핏 분석**: 체형-의류 치수 차이를 물리 기반으로 분석하여 핏 프롬프트를 생성한다.
+- **FLUX 리파인 선택적 적용**: config 플래그로 FLUX 단계를 on/off 전환하여 비용을 제어한다.
+
+
+## 기술 스택
+
+| 분류 | 기술 | 용도 |
+|------|------|------|
+| Orchestrator | FastAPI + Uvicorn | 비동기 API 서버 |
+| GPU Worker | Modal Serverless (H200) | AI 모델 실행 |
+| 3D 복원 | SAM 3D Body DINOv3 | 단일 사진 3D 메쉬 복원 |
+| 이미지 생성 | SDXL + ControlNet Depth | depth 기반 사실적 인체 생성 |
+| 텍스처 리파인 | FLUX.2-klein-4B | img2img 질감 개선 (선택) |
+| 가상 착용 | FASHN VTON v1.5 | maskless 의류 합성 |
+| 얼굴 보존 | InsightFace antelopev2 | 각도별 face swap |
+| 메쉬 렌더링 | NumPy CPU Renderer | 소프트웨어 기반 depth map 생성 |
+| 핏 분석 | P2P Engine | 물리 기반 핏 프롬프트 변환 |
+
+
+## 실행 방법
 
 ```bash
-# 1. Setup
+# 1. 환경 설정
 cd ai-service
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# 2. Environment
+# 2. 환경 변수
 cp .env.example .env
-# Set GEMINI_API_KEY in .env
+# .env.example 참고하여 API 키 설정
 
-# 3. Download models (~25GB)
-python setup_models.py
-
-# 4. Run orchestrator (local mode)
-python -m orchestrator.main
-
-# 5. Test
-open http://localhost:8000/docs   # Swagger UI
-open http://localhost:8000/ui     # Test console
-```
-
-### Modal GPU Mode
-
-```bash
-# Install Modal SDK
+# 3. Modal 인증 (GPU Worker 사용 시)
 pip install modal
-
-# Authenticate
 modal setup
 
-# Upload model weights to Modal Volume (one-time)
-python scripts/upload_models_to_volume.py
-
-# Run — orchestrator auto-detects Modal and delegates GPU tasks to H100
+# 4. Orchestrator 실행
 python -m orchestrator.main
+# http://localhost:8000/docs 에서 API 확인
 ```
 
----
 
-## API Endpoints
+## 디렉토리 구조
 
-| Method | Path | Description |
-|:-------|:-----|:------------|
-| `GET` | `/health` | System health + model status |
-| `POST` | `/avatar/create` | Phase 1: Avatar generation |
-| `POST` | `/wardrobe/analyze` | Phase 2: Clothing analysis |
-| `POST` | `/fitting/run` | Phase 3: 8-angle virtual try-on |
-| `POST` | `/viewer3d/generate` | Phase 4: 3D GLB generation |
-| `POST` | `/face-bank/register` | Register face reference |
-| `POST` | `/p2p/analyze` | Physics-to-Prompt analysis |
-| `POST` | `/quality/inspect` | Gemini quality gate |
-| `GET` | `/sessions` | Active session list |
+```
+ai-service/
+├── orchestrator/               # Tier 3: FastAPI Orchestrator
+│   ├── main.py                 #   앱 진입점 + lifespan
+│   ├── config.py               #   환경 기반 설정
+│   ├── session.py              #   파이프라인 세션 관리
+│   ├── worker_client.py        #   Modal GPU Worker RPC 클라이언트
+│   ├── serialization.py        #   numpy/image base64 코덱
+│   └── routes/
+│       ├── avatar.py           #   Phase 1: 아바타 생성
+│       ├── wardrobe.py         #   Phase 2: 의류 분석
+│       ├── fitting.py          #   Phase 3: 가상 피팅 (5-phase)
+│       ├── viewer3d.py         #   Phase 4: 3D GLB 생성
+│       ├── visualization.py    #   렌더 결과 시각화
+│       ├── face_bank.py        #   얼굴 레퍼런스 관리
+│       ├── p2p.py              #   핏 분석 API
+│       └── quality.py          #   품질 게이트
+├── worker/                     # Tier 4: Modal GPU Worker
+│   ├── modal_app.py            #   H200 서버리스 GPU 함수
+│   └── _upload_*.py            #   모델 볼륨 업로드 유틸리티
+├── core/                       # AI 핵심 로직
+│   ├── config.py               #   모델 경로, 파이프라인 플래그
+│   ├── body_analyzer.py        #   체형 분석 + 컵 사이즈 변환
+│   ├── sw_renderer.py          #   CPU 소프트웨어 메쉬 렌더러
+│   ├── fitting.py              #   로컬 피팅 파이프라인
+│   ├── pipeline.py             #   아바타 생성 파이프라인
+│   ├── face_bank.py            #   다중 참조 얼굴 관리
+│   ├── face_identity.py        #   InsightFace 연동
+│   ├── p2p_engine.py           #   Physics-to-Prompt 엔진
+│   ├── p2p_ensemble.py         #   다중 전략 P2P 앙상블
+│   └── ...
+├── scripts/                    # 관리 스크립트
+├── tests/                      # 테스트 코드
+└── requirements.txt
+```

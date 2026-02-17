@@ -98,34 +98,57 @@ async def avatar_generate(
         body_type=body_type,
     )
 
+    # ── Pre-read uploads (so file handles survive fallback) ─────
+    video_bytes = video.file.read() if video else None
+    image_img = _read_upload(image) if image else None
+
+    if not video_bytes and image_img is None:
+        raise HTTPException(400, "Provide either video or image")
+
     # ── Distributed mode ────────────────────────────────────────
     if worker.is_configured():
         try:
             logger.info(f"[{rid}] Using distributed worker for Phase 1")
 
             # Extract best frame locally (lightweight CPU work)
-            if video:
+            if video_bytes:
                 video_path = str(OUTPUT_DIR / f"temp_video_{rid}.mp4")
                 with open(video_path, "wb") as f:
-                    f.write(video.file.read())
+                    f.write(video_bytes)
 
                 from core.pipeline import _extract_frames
                 frames = _extract_frames(video_path, max_frames=10)
-                if video_path and os.path.exists(video_path):
+                if os.path.exists(video_path):
                     os.remove(video_path)
                 if not frames:
                     raise HTTPException(400, "Could not extract frames from video")
-                # Use middle frame as best candidate
                 best_frame = frames[len(frames) // 2]
-            elif image:
-                best_frame = _read_upload(image)
             else:
-                raise HTTPException(400, "Provide either video or image")
+                best_frame = image_img
 
-            sm.update_status(session_id, "phase1", "running", 0.3)
+            sm.update_status(session_id, "phase1", "running", 0.2)
 
-            # Send to GPU worker for 3D reconstruction
+            # Step 1: YOLO26-L person detection on GPU worker
             frame_b64 = image_to_b64(best_frame)
+            try:
+                yolo_resp = await worker.detect_yolo(frame_b64)
+                if yolo_resp.get("num_persons", 0) > 0:
+                    bbox = yolo_resp["detections"][0]["bbox"]
+                    x1, y1, x2, y2 = [int(v) for v in bbox]
+                    h, w = best_frame.shape[:2]
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(w, x2), min(h, y2)
+                    best_frame = best_frame[y1:y2, x1:x2]
+                    frame_b64 = image_to_b64(best_frame)
+                    logger.info(f"[{rid}] YOLO detected person, cropped to [{x1},{y1},{x2},{y2}]")
+                else:
+                    logger.warning(f"[{rid}] YOLO: no person detected, using full frame")
+            except WorkerUnavailableError:
+                logger.warning(f"[{rid}] YOLO worker failed, using full frame")
+
+            sm.update_status(session_id, "phase1", "running", 0.4)
+
+            # Step 2: SAM 3D Body reconstruction on GPU worker
             worker_resp = await worker.reconstruct_3d_body(frame_b64)
 
             sm.update_status(session_id, "phase1", "running", 0.7)
@@ -138,13 +161,41 @@ async def avatar_generate(
 
             # Build GLB and renders locally (CPU-bound, cheap)
             from core.sw_renderer import render_mesh
-            from core.config import FITTING_ANGLES
+            from core.config import FITTING_ANGLES, get_bust_cup_scale
+            from core.body_analyzer import bust_cup_to_body_scale
+
+            # Bust-aware rendering parameters
+            bust_cup_scale_val = None
+            bust_band_factor_val = None
+            body_scale_val = None
+            render_gender = gender
+
+            if bust_cup and gender.lower() == "female":
+                bust_cup_scale_val = get_bust_cup_scale(bust_cup)
+                body_scale_val = bust_cup_to_body_scale(
+                    bust_cup, height_cm, weight_kg, gender,
+                )
+                logger.info(
+                    f"[{rid}] Bust-aware rendering: cup={bust_cup} "
+                    f"cup_scale={bust_cup_scale_val}"
+                )
 
             mesh_renders = {}
             if vertices is not None and faces is not None:
                 for angle in FITTING_ANGLES:
                     try:
-                        render = render_mesh(vertices, faces, angle_deg=angle)
+                        render = render_mesh(
+                            vertices, faces,
+                            angle_deg=angle,
+                            straighten=True,
+                            ground_plane=True,
+                            fold_arms=True,
+                            close_legs=True,
+                            body_scale=body_scale_val,
+                            bust_cup_scale=bust_cup_scale_val,
+                            bust_band_factor=bust_band_factor_val,
+                            gender=render_gender,
+                        )
                         mesh_renders[angle] = render
                     except Exception as e:
                         logger.warning(f"[{rid}] Render at {angle}deg failed: {e}")
@@ -165,6 +216,7 @@ async def avatar_generate(
                 joints=joints,
                 betas=betas,
                 gender=gender,
+                person_image=best_frame,
                 glb_bytes=glb_bytes,
                 mesh_renders=mesh_renders,
                 metadata=metadata,
@@ -172,15 +224,14 @@ async def avatar_generate(
 
         except WorkerUnavailableError as e:
             logger.warning(f"[{rid}] Worker unavailable, falling back to local: {e}")
-            # Fall through to local mode
-            body_data = await _local_generate(
-                rid, video, image, metadata, inspector,
+            body_data = await _local_generate_from_data(
+                rid, video_bytes, image_img, metadata, inspector,
             )
 
     # ── Local mode ──────────────────────────────────────────────
     else:
-        body_data = await _local_generate(
-            rid, video, image, metadata, inspector,
+        body_data = await _local_generate_from_data(
+            rid, video_bytes, image_img, metadata, inspector,
         )
 
     # Store result
@@ -237,24 +288,23 @@ async def avatar_glb(
 
 # ── Local fallback ──────────────────────────────────────────────
 
-async def _local_generate(
+async def _local_generate_from_data(
     rid: str,
-    video: UploadFile | None,
-    image: UploadFile | None,
+    video_bytes: bytes | None,
+    image_img: np.ndarray | None,
     metadata: Metadata,
     inspector,
 ) -> BodyData:
-    """Run avatar generation entirely on the local machine."""
+    """Run avatar generation on local machine from pre-read data."""
     video_path = None
     images = None
 
-    if video:
+    if video_bytes:
         video_path = str(OUTPUT_DIR / f"temp_video_{rid}.mp4")
         with open(video_path, "wb") as f:
-            f.write(video.file.read())
-    elif image:
-        img = _read_upload(image)
-        images = [img]
+            f.write(video_bytes)
+    elif image_img is not None:
+        images = [image_img]
     else:
         raise HTTPException(400, "Provide either video or image")
 
@@ -265,7 +315,6 @@ async def _local_generate(
         inspector=inspector,
     )
 
-    # Clean up temp video
     if video_path and os.path.exists(video_path):
         os.remove(video_path)
 

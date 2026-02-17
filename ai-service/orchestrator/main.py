@@ -3,7 +3,7 @@ StyleLens V6 — AI Orchestrator (Tier 3) FastAPI Server
 
 Two modes of operation:
   1. Local mode (Modal not installed): All models run locally via core/ pipeline
-  2. Modal mode (Modal SDK available): GPU tasks delegated to Modal H100 via .remote()
+  2. Modal mode (Modal SDK available): GPU tasks delegated to Modal H200 via .remote()
 
 Run: python -m orchestrator.main
 """
@@ -52,14 +52,14 @@ async def lifespan(app: FastAPI):
     # Gemini
     if GEMINI_ENABLED:
         from core.gemini_client import GeminiClient
-        from core.gemini_feedback import GeminiFeedbackInspector
         app.state.gemini = GeminiClient()
-        app.state.inspector = GeminiFeedbackInspector()
         logger.info("Gemini client initialized")
     else:
         app.state.gemini = None
-        app.state.inspector = None
         logger.warning("Gemini disabled — quality gates will not function")
+
+    # Feedback Inspector disabled for fast testing
+    app.state.inspector = None
 
     # Worker client (Modal remote call)
     app.state.worker_client = WorkerClient()

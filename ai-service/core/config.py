@@ -166,6 +166,73 @@ FITTING_ANGLES = [0, 45, 90, 135, 180, 225, 270, 315]
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+# ── Phase 1.5: Realistic Virtual Model ─────────────────────────
+REALISTIC_MODEL_ENABLED = True   # Convert mesh renders to realistic person images
+REALISTIC_MODEL_STEPS = 28       # FLUX inference steps for mesh-to-realistic
+REALISTIC_MODEL_GUIDANCE = 30.0  # FLUX guidance scale
+
+# ── V35+ Pipeline Flags ────────────────────────────────────────
+# SDXL + ControlNet Depth (Phase 1.5A)
+SDXL_NUM_STEPS = 30
+SDXL_GUIDANCE = 6.5
+SDXL_DEFAULT_CN_SCALE = 0.60     # Fallback if no bust-specific cn_scale
+
+# FLUX.2-klein img2img refiner (Phase 1.5B) — OPTIONAL
+FLUX_REFINE_ENABLED = False      # Skip FLUX to save ~40s GPU / ~140원 per test
+FLUX_REFINE_STEPS = 4
+FLUX_REFINE_GUIDANCE = 1.0
+
+# FASHN VTON v1.5 (Phase 3)
+FASHN_VTON_TIMESTEPS = 30
+FASHN_VTON_GUIDANCE = 1.5
+FASHN_VTON_CATEGORY = "tops"
+FASHN_VTON_GARMENT_TYPE = "model"
+
+# InsightFace Face Swap (Phase 4) — post-processing on VTON results
+FACE_SWAP_ENABLED = True
+FACE_SWAP_BLEND_RADIUS = 25
+FACE_SWAP_SCALE = 1.0
+
+# ── Bust Cup → Dynamic ControlNet Scale Mapping ───────────────
+# Larger bust → stronger ControlNet adherence to preserve bust silhouette
+# through SDXL→VTON pipeline. KEY FINDING from v35 testing.
+BUST_CUP_CN_SCALE = {
+    "AA": 0.50,
+    "A":  0.55,
+    "B":  0.60,   # baseline
+    "C":  0.65,
+    "D":  0.70,
+    "DD": 0.72,
+    "E":  0.75,
+    "F":  0.78,
+    "G":  0.80,
+    "H":  0.82,
+}
+
+# Bust cup → mesh cup_scale multiplier (B-cup = 1.0 baseline)
+BUST_CUP_SCALE = {
+    "AA": 0.3,
+    "A":  0.6,
+    "B":  1.0,
+    "C":  1.4,
+    "D":  1.8,
+    "DD": 2.2,
+    "E":  2.2,
+    "F":  3.0,
+    "G":  3.4,
+    "H":  3.8,
+}
+
+
+def get_bust_cn_scale(cup: str) -> float:
+    """Get dynamic ControlNet conditioning scale for a bust cup size."""
+    return BUST_CUP_CN_SCALE.get(cup.upper().strip(), SDXL_DEFAULT_CN_SCALE)
+
+
+def get_bust_cup_scale(cup: str) -> float:
+    """Get mesh vertex bust scaling multiplier for a cup size."""
+    return BUST_CUP_SCALE.get(cup.upper().strip(), 1.0)
+
 # ── Gemini Feedback Quality Gates ──────────────────────────────
 STAGE_THRESHOLDS = {
     "person_detection": 0.70,

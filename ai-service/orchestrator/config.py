@@ -6,8 +6,9 @@ Environment-based config for Tier 3 orchestrator.
 import os
 
 # ── GPU Worker (Tier 4) — Modal remote call ────────────────────
-# Modal SDK가 설치되어 있으면 GPU 작업을 Modal H100에 위임.
-# modal.Function.from_name() → .remote() 방식 (배포 없이 호출).
+# Modal SDK가 설치되어 있으면 GPU 작업을 Modal H200에 위임.
+# app.run() → fn.remote() 방식 (배포 없이 ephemeral GPU 호출).
+# Modal Worker: SDK 설치 여부로 자동 감지
 try:
     import modal  # noqa: F401
     MODAL_AVAILABLE = True

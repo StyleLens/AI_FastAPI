@@ -665,8 +665,9 @@ class TestMainAPI:
     @pytest.fixture
     def client(self):
         from fastapi.testclient import TestClient
-        from main import app
-        return TestClient(app)
+        from orchestrator.main import app
+        with TestClient(app) as c:
+            yield c
 
     def test_root(self, client):
         r = client.get("/")
@@ -687,19 +688,21 @@ class TestMainAPI:
 
     def test_wardrobe_no_gemini(self, client):
         # Without Gemini, should return 503
-        import main
-        if main.gemini is None:
+        from orchestrator.main import app as main_app
+        if getattr(main_app.state, "gemini", None) is None:
             r = client.post("/wardrobe/add-image",
                            files={"image": ("test.jpg", b"\xff\xd8\xff", "image/jpeg")})
             assert r.status_code == 503
 
     def test_fitting_no_body(self, client):
         r = client.post("/fitting/try-on")
-        assert r.status_code == 400
+        # Default session_id="default" is not found → 404
+        assert r.status_code == 404
 
     def test_viewer3d_no_fitting(self, client):
         r = client.post("/viewer3d/generate")
-        assert r.status_code == 400
+        # Default session_id="default" is not found → 404
+        assert r.status_code == 404
 
     def test_glb_not_found(self, client):
         r = client.get("/viewer3d/model/nonexistent")
@@ -1084,12 +1087,13 @@ class TestP2PIntegration:
         assert m.shoulder_width_cm == 0.0
 
     def test_p2p_analyze_endpoint_no_body(self, client=None):
-        """Verify /p2p/analyze returns 400 without Phase 1 data."""
+        """Verify /p2p/analyze returns 404 without session (default session not found)."""
         from fastapi.testclient import TestClient
-        from main import app
-        client = TestClient(app)
-        r = client.post("/p2p/analyze")
-        assert r.status_code == 400
+        from orchestrator.main import app
+        with TestClient(app) as client:
+            r = client.post("/p2p/analyze")
+            # Default session_id="default" is not found → 404
+            assert r.status_code == 404
 
     def test_fitting_mask_expansion(self):
         """Verify _apply_p2p_mask_expansion function exists and works."""

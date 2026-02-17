@@ -1,21 +1,30 @@
 # Excluded directories
 AI_Docs/
 IMG_Data/
-model
+model/
+docs/
 
 # Environment
 .env
+.env.local
+.env.production
+!.env.example
 .venv/
+venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # OS
 .DS_Store
+Thumbs.db
 
 # ai-service venv & env
 ai-service/.venv/
 ai-service/.env
-ai-service/model
+!ai-service/.env.example
+ai-service/model/
+ai-service/.pytest_cache/
 
 # Output & test data
 output/
@@ -26,3 +35,43 @@ test_video.mp4
 
 # Model files
 *.pt
+*.pth
+*.bin
+*.onnx
+*.safetensors
+*.h5
+*.pkl
+*.joblib
+
+# Test result images (large binary output)
+ai-service/tests/v*/
+ai-service/tests/NewTest/
+
+# Internal docs (quality reports, changelogs)
+ai-service/docs/image-quality-report-*.md
+ai-service/docs/CHANGELOG_*.md
+ai-service/docs/Change_MD.md
+ai-service/docs/bust_adjustment_integration_guide.md
+ai-service/docs/bust_volume_feature.md
+ai-service/docs/phase15_implementation.md
+ai-service/docs/pulid_integration_v17.md
+ai-service/docs/v17b-optimization.md
+ai-service/docs/v33_face_swap_summary.md
+
+# Test markdown docs
+ai-service/tests/*.md
+ai-service/tests/*.sh
+ai-service/scripts/README.md
+
+# Worker vendor code (unused)
+ai-service/worker/pulid_vendor/
+
+# Worker test/debug scripts
+ai-service/worker/_test_*.py
+ai-service/worker/_hf_debug.py
+ai-service/worker/_catvton_test.py
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

@@ -73,11 +73,11 @@ async def fitting_tryon(
     face_photo: UploadFile | None = File(None),
     session_id: str = Query("default"),
 ):
-    """Phase 3: CatVTON-FLUX 8-angle virtual try-on.
+    """Phase 3: 5-phase virtual try-on (v35+ pipeline).
 
     - Local mode: full pipeline via core.fitting.generate_fitting()
-    - Distributed mode: renders person images + masks locally,
-      delegates CatVTON-FLUX batch to GPU worker, assembles result.
+    - Distributed mode: SDXL→(FLUX)→FASHN VTON→Face Swap via GPU worker.
+      Includes bust-aware dynamic cn_scale per cup size.
     """
     sm = _get_session_manager(request)
     worker = _get_worker(request)
@@ -96,8 +96,9 @@ async def fitting_tryon(
         raise HTTPException(400, "Run Phase 1 (avatar) first")
     if not session.clothing_item:
         raise HTTPException(400, "Run Phase 2 (wardrobe) first")
-    if not gemini:
-        raise HTTPException(503, "Gemini not available")
+    # Gemini is optional for fitting — FASHN VTON or local fallback works without it
+    # if not gemini:
+    #     raise HTTPException(503, "Gemini not available")
 
     sm.update_status(session_id, "phase3", "running", 0.1)
 
@@ -123,11 +124,11 @@ async def fitting_tryon(
             )
         except Exception as e:
             logger.error(f"[{rid}] generate_fitting failed: {e}")
-            # If CatVTON loading fails, disable it and retry with Gemini fallback
+            # If VTON loading fails, disable and retry with Gemini fallback
             from core import config as _cfg
             if _cfg.CATVTON_FLUX_ENABLED:
                 logger.warning(
-                    f"[{rid}] CatVTON load failed, disabling and retrying with Gemini"
+                    f"[{rid}] VTON load failed, disabling and retrying with Gemini"
                 )
                 _cfg.CATVTON_FLUX_ENABLED = False
                 sm.update_status(session_id, "phase3", "running", 0.2)
@@ -210,56 +211,198 @@ async def _distributed_fitting(
     session_id: str = "default",
     sm: SessionManager | None = None,
 ) -> FittingResult:
-    """Run fitting with CatVTON-FLUX on the remote GPU worker.
+    """Distributed 5-phase fitting pipeline (v35+).
 
-    Workflow:
-        1. Render person images at 8 angles (local CPU, sw_renderer)
-        2. Generate agnostic masks from parse map (local CPU)
-        3. Send batch to worker for CatVTON-FLUX
-        4. Run P2P analysis locally (deterministic, no GPU)
-        5. Assemble FittingResult
-    Falls back to full local pipeline on worker failure.
+    Pipeline:
+        Phase 1.5A: SDXL + ControlNet Depth → pose-accurate realistic scaffold
+                     Dynamic cn_scale per bust cup size (A=0.55 ~ H=0.82)
+        Phase 1.5B: FLUX.2-klein img2img → texture upgrade (OPTIONAL, config flag)
+        Phase 3:    FASHN VTON v1.5 → maskless virtual try-on (replaces CatVTON)
+        Phase 4:    InsightFace Face Swap → face consistency across angles
+        Phase 5:    P2P analysis (local CPU)
+
+    Key v35 improvements:
+        - Dynamic cn_scale: larger bust → stronger ControlNet depth adherence
+        - Bust-aware body prompts via bust_cup_to_sdxl_description()
+        - FLUX refine optional (FLUX_REFINE_ENABLED flag) for cost savings (~40s GPU)
+        - FASHN VTON replaces CatVTON (maskless, better quality)
+        - InsightFace face swap for identity preservation
     """
     import time
-    from core.config import FITTING_ANGLES
-    from core.sw_renderer import render_mesh
+    from core.config import (
+        FITTING_ANGLES, REALISTIC_MODEL_ENABLED,
+        SDXL_NUM_STEPS, SDXL_GUIDANCE, SDXL_DEFAULT_CN_SCALE,
+        FLUX_REFINE_ENABLED, FLUX_REFINE_STEPS, FLUX_REFINE_GUIDANCE,
+        FASHN_VTON_TIMESTEPS, FASHN_VTON_GUIDANCE,
+        FASHN_VTON_CATEGORY, FASHN_VTON_GARMENT_TYPE,
+        FACE_SWAP_ENABLED, FACE_SWAP_BLEND_RADIUS, FACE_SWAP_SCALE,
+        get_bust_cn_scale, get_bust_cup_scale,
+    )
+    from core.body_analyzer import bust_cup_to_sdxl_description
     from core.p2p_engine import run_p2p
 
     try:
         t0 = time.time()
 
-        # Step 1: Render person at each angle (CPU)
-        persons_b64 = []
-        masks_b64 = []
-
         if sm:
-            sm.update_status(session_id, "phase3", "running", 0.2)
+            sm.update_status(session_id, "phase3", "running", 0.02)
+
+        # ── Extract metadata for bust-aware pipeline ──
+        metadata = body_data.metadata
+        bust_cup = metadata.bust_cup if metadata else ""
+        gender = metadata.gender if metadata else (body_data.gender or "female")
+        height_cm = metadata.height_cm if metadata else 165.0
+        weight_kg = metadata.weight_kg if metadata else 58.0
+
+        # Dynamic cn_scale based on bust cup size
+        cn_scale = get_bust_cn_scale(bust_cup) if bust_cup else SDXL_DEFAULT_CN_SCALE
+
+        # Body description for SDXL/FLUX prompts
+        body_desc = ""
+        if bust_cup and gender.lower() == "female":
+            body_desc = bust_cup_to_sdxl_description(bust_cup, height_cm, weight_kg, gender)
+            logger.info(f"[{rid}] Bust-aware: cup={bust_cup} cn_scale={cn_scale} desc='{body_desc}'")
+
+        # ── Step 1: Collect mesh renders ──
+        logger.info(f"[{rid}] Collecting 8-angle mesh renders...")
+        mesh_renders_b64 = []
+        angles_used = []
 
         for angle in FITTING_ANGLES:
-            if body_data.vertices is not None and body_data.faces is not None:
-                person_img = render_mesh(
-                    body_data.vertices, body_data.faces, angle_deg=angle,
-                )
+            mesh_render = body_data.mesh_renders.get(angle)
+            if mesh_render is not None:
+                mesh_renders_b64.append(image_to_b64(mesh_render))
+                angles_used.append(angle)
             else:
-                person_img = np.zeros((512, 512, 3), dtype=np.uint8)
+                logger.warning(f"[{rid}] No mesh render for angle {angle}deg, skipping")
 
-            persons_b64.append(image_to_b64(person_img))
-
-            # Generate agnostic mask
-            if clothing_item.parse_map is not None:
-                from core.fitting import _generate_agnostic_mask
-                category = getattr(clothing_item.analysis, "category", "top")
-                mask = _generate_agnostic_mask(clothing_item.parse_map, category)
-            else:
-                mask = np.ones((512, 512), dtype=np.uint8) * 255
-            masks_b64.append(image_to_b64_png(
-                cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR) if mask.ndim == 2 else mask
-            ))
+        logger.info(f"[{rid}] Collected {len(angles_used)} mesh renders: {angles_used}")
 
         if sm:
-            sm.update_status(session_id, "phase3", "running", 0.4)
+            sm.update_status(session_id, "phase3", "running", 0.05)
 
-        # Step 2: Encode clothing
+        # ── Phase 1.5A: SDXL + ControlNet Depth ──
+        person_image_b64 = None
+        if body_data.person_image is not None:
+            person_image_b64 = image_to_b64(body_data.person_image)
+
+        if REALISTIC_MODEL_ENABLED and mesh_renders_b64:
+            logger.info(
+                f"[{rid}] Phase 1.5A: SDXL + ControlNet Depth "
+                f"(cn_scale={cn_scale}, steps={SDXL_NUM_STEPS})"
+            )
+
+            # Build bust-aware SDXL prompt
+            body_desc_fragment = f"{body_desc}, " if body_desc else ""
+            sdxl_prompt = (
+                "RAW photo, an extremely detailed real photograph of a young Korean woman, "
+                "realistic skin pores, natural skin texture, subtle skin imperfections, "
+                f"{body_desc_fragment}"
+                "long straight dark brown hair, {{angle_desc}}, "
+                "wearing a plain light gray crewneck t-shirt and dark blue fitted jeans, "
+                "white low-top sneakers on both feet, "
+                "standing upright with perfect posture on a flat gray floor, "
+                "head directly above shoulders, chin level, straight vertical neck, "
+                "relaxed natural arms hanging at sides, hands beside thighs, "
+                "legs together in natural standing position, feet flat on ground, "
+                "shot with Fujifilm XT4, 85mm portrait lens, film grain, "
+                "clean neutral light gray studio background, soft natural lighting, "
+                "realistic body proportions matching the depth silhouette exactly, "
+                "natural calm expression, "
+                "full body visible from head to toe, 8k uhd"
+            )
+            sdxl_negative = (
+                "anime, cartoon, illustration, painting, drawing, sketch, "
+                "3d render, CGI, CG, computer graphics, digital art, "
+                "smooth plastic skin, airbrushed, doll-like, porcelain, wax figure, "
+                "floating, levitating, hovering, feet off ground, mid-air, "
+                "leaning forward, hunched, slouching, bent over, "
+                "turtle neck, forward head posture, chin jutting out, neck craning, "
+                "tilted, diagonal posture, crooked stance, "
+                "T-pose, arms spread wide, arms extended outward, "
+                "A-pose, legs spread apart, wide stance, "
+                "hands on hips, arms akimbo, hands behind back, "
+                "cropped, cut off, missing limbs, extra limbs, missing feet, "
+                "extremely thin, anorexic, bodybuilder, obese, "
+                "nsfw, nude, revealing, "
+                "blurry, low quality, distorted, deformed, ugly, bad anatomy, "
+                "oversaturated, overexposed, "
+                "shorts, skirt, sandals, bare feet, high heels, boots, "
+                "different outfits, multiple people, split image"
+            )
+
+            realistic_resp = await worker.mesh_to_realistic(
+                mesh_renders_b64=mesh_renders_b64,
+                person_image_b64=person_image_b64 or "",
+                angles=angles_used,
+                num_steps=SDXL_NUM_STEPS,
+                guidance=SDXL_GUIDANCE,
+                controlnet_conditioning_scale=cn_scale,
+                prompt_template=sdxl_prompt,
+                negative_prompt_override=sdxl_negative,
+                body_description=body_desc,
+            )
+
+            if sm:
+                sm.update_status(session_id, "phase3", "running", 0.25)
+
+            if "error" in realistic_resp:
+                logger.warning(f"[{rid}] SDXL failed: {realistic_resp['error']}, using raw mesh renders")
+                persons_b64_list = mesh_renders_b64
+            else:
+                persons_b64_list = realistic_resp.get("realistic_renders_b64", mesh_renders_b64)
+                logger.info(f"[{rid}] SDXL: {len(persons_b64_list)} realistic renders generated")
+        else:
+            logger.warning(f"[{rid}] Realistic model disabled, using raw mesh renders")
+            persons_b64_list = mesh_renders_b64
+
+        # ── Phase 1.5B: FLUX.2-klein img2img (OPTIONAL) ──
+        if FLUX_REFINE_ENABLED:
+            logger.info(
+                f"[{rid}] Phase 1.5B: FLUX.2-klein-4B img2img "
+                f"(steps={FLUX_REFINE_STEPS}, guidance={FLUX_REFINE_GUIDANCE})"
+            )
+
+            body_desc_fragment = f"{body_desc}, " if body_desc else ""
+            flux_prompt = (
+                "RAW photo, ultra realistic full-body photograph of a young Korean woman, "
+                f"{body_desc_fragment}"
+                "{{angle_desc}}, "
+                "extremely detailed realistic skin with visible pores and natural texture, "
+                "natural hair with individual strands visible, "
+                "wearing a plain gray t-shirt and dark blue jeans, white sneakers, "
+                "realistic fabric texture with natural wrinkles and folds, "
+                "clean light gray studio background, soft natural lighting, "
+                "full body from head to feet visible, "
+                "shot on Fujifilm XT4, 85mm portrait lens, subtle film grain, "
+                "professional fashion photography, 8k uhd, photorealistic"
+            )
+
+            flux_resp = await worker.flux_refine(
+                images_b64=persons_b64_list,
+                prompt_template=flux_prompt,
+                angles=angles_used,
+                num_steps=FLUX_REFINE_STEPS,
+                guidance=FLUX_REFINE_GUIDANCE,
+                seed=42,
+                body_description=body_desc,
+            )
+
+            if sm:
+                sm.update_status(session_id, "phase3", "running", 0.40)
+
+            if "error" in flux_resp:
+                logger.warning(f"[{rid}] FLUX refine failed: {flux_resp['error']}, using SDXL output")
+            else:
+                persons_b64_list = flux_resp.get("refined_b64", persons_b64_list)
+                logger.info(f"[{rid}] FLUX: {len(persons_b64_list)} images refined")
+        else:
+            logger.info(f"[{rid}] Phase 1.5B: FLUX refine SKIPPED (FLUX_REFINE_ENABLED=False)")
+
+        if sm:
+            sm.update_status(session_id, "phase3", "running", 0.45)
+
+        # ── Phase 3: FASHN VTON v1.5 (maskless) ──
         if clothing_item.segmented_image is not None:
             clothing_b64 = image_to_b64(clothing_item.segmented_image)
         elif clothing_item.original_images:
@@ -267,30 +410,87 @@ async def _distributed_fitting(
         else:
             raise HTTPException(400, "No clothing image available")
 
-        # Step 3: Send to GPU worker for CatVTON-FLUX batch
-        logger.info(f"[{rid}] Sending {len(persons_b64)} angles to worker CatVTON-FLUX")
-        worker_resp = await worker.tryon_catvton_batch(
-            persons_b64=persons_b64,
+        logger.info(
+            f"[{rid}] Phase 3: FASHN VTON v1.5 "
+            f"({len(persons_b64_list)} images, category={FASHN_VTON_CATEGORY})"
+        )
+
+        vton_resp = await worker.tryon_fashn_batch(
+            persons_b64=persons_b64_list,
             clothing_b64=clothing_b64,
-            masks_b64=masks_b64,
+            category=FASHN_VTON_CATEGORY,
+            garment_photo_type=FASHN_VTON_GARMENT_TYPE,
+            num_timesteps=FASHN_VTON_TIMESTEPS,
+            guidance_scale=FASHN_VTON_GUIDANCE,
+            seed=42,
         )
 
         if sm:
-            sm.update_status(session_id, "phase3", "running", 0.8)
+            sm.update_status(session_id, "phase3", "running", 0.65)
 
-        # Step 4: Decode results
+        if "error" in vton_resp:
+            logger.error(f"[{rid}] FASHN VTON failed: {vton_resp['error']}")
+            raise WorkerUnavailableError(f"VTON failed: {vton_resp['error']}")
+
+        fitted_b64_list = vton_resp.get("results_b64", [])
+        logger.info(f"[{rid}] VTON: {len(fitted_b64_list)} fitted images generated")
+
+        # ── Phase 4: Face Swap (InsightFace antelopev2) ──
+        final_b64_list = fitted_b64_list
+        face_reference_b64 = None
+        if face_photo is not None:
+            face_reference_b64 = image_to_b64(face_photo)
+
+        if FACE_SWAP_ENABLED and face_reference_b64 and fitted_b64_list:
+            logger.info(
+                f"[{rid}] Phase 4: InsightFace Face Swap "
+                f"({len(fitted_b64_list)} images, blend_radius={FACE_SWAP_BLEND_RADIUS})"
+            )
+
+            swap_resp = await worker.face_swap(
+                images_b64=fitted_b64_list,
+                face_reference_b64=face_reference_b64,
+                angles=angles_used,
+                blend_radius=FACE_SWAP_BLEND_RADIUS,
+                face_scale=FACE_SWAP_SCALE,
+            )
+
+            if sm:
+                sm.update_status(session_id, "phase3", "running", 0.80)
+
+            if "error" in swap_resp:
+                logger.warning(f"[{rid}] Face swap failed: {swap_resp['error']}, using VTON output")
+            else:
+                final_b64_list = swap_resp.get("swapped_b64", fitted_b64_list)
+                face_detected = swap_resp.get("face_detected", [])
+                n_swapped = sum(1 for d in face_detected if d)
+                logger.info(f"[{rid}] Face Swap: {n_swapped}/{len(face_detected)} faces swapped")
+        else:
+            if not FACE_SWAP_ENABLED:
+                logger.info(f"[{rid}] Phase 4: Face swap SKIPPED (FACE_SWAP_ENABLED=False)")
+            elif not face_reference_b64:
+                logger.info(f"[{rid}] Phase 4: Face swap SKIPPED (no face reference)")
+
+        if sm:
+            sm.update_status(session_id, "phase3", "running", 0.85)
+
+        # ── Step 5: Decode results into FittingResult ──
         tryon_images = {}
         method_used = {}
-        results_b64 = worker_resp.get("results_b64", [])
-        for i, angle in enumerate(FITTING_ANGLES):
-            if i < len(results_b64):
-                tryon_images[angle] = b64_to_image(results_b64[i])
-                method_used[angle] = "catvton_flux_worker"
+
+        for i, angle in enumerate(angles_used):
+            if i < len(final_b64_list):
+                tryon_images[angle] = b64_to_image(final_b64_list[i])
+                method_used[angle] = "fashn_vton_v35"
             else:
-                logger.warning(f"[{rid}] No result for angle {angle} from worker")
+                logger.warning(f"[{rid}] Missing result for angle {angle}deg")
                 method_used[angle] = "missing"
 
-        # Step 5: P2P analysis locally (no GPU needed)
+        for angle in FITTING_ANGLES:
+            if angle not in tryon_images:
+                method_used[angle] = "skipped"
+
+        # ── Step 6: P2P analysis locally ──
         p2p_result = None
         try:
             from core.config import P2P_ENABLED
@@ -300,6 +500,7 @@ async def _distributed_fitting(
             logger.warning(f"[{rid}] P2P analysis failed: {e}")
 
         elapsed = time.time() - t0
+        logger.info(f"[{rid}] Distributed fitting complete in {elapsed:.1f}s")
 
         return FittingResult(
             tryon_images=tryon_images,

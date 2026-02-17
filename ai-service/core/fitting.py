@@ -83,6 +83,135 @@ def _generate_agnostic_mask(parse_map: np.ndarray,
     return mask
 
 
+def _generate_adaptive_mask(parse_map: np.ndarray, category: str = "top") -> np.ndarray:
+    """Adaptive mask: base FASHN mask → Upper Body Rect if coverage is low.
+
+    Improved heuristics based on v6-v7 testing:
+    - Mask B (Upper Body Rect) performs better for skin-tight clothing
+    - Back view detection (no face) → force Rect
+    - Tight-fitting clothes detection → force Rect
+    - Coverage threshold raised from 15% to 25%
+
+    Strategy:
+        1. Generate base FASHN mask with enhanced dilation
+        2. Detect back view (no face) → force Upper Body Rect
+        3. Detect tight-fitting clothes (low raw coverage) → force Rect
+        4. Check coverage ratio:
+           - If coverage >= 25%, use base mask
+           - If coverage < 25%, switch to Upper Body Rect
+
+    Args:
+        parse_map: FASHN parse map (HxW uint8, class IDs)
+        category: "top", "bottom", "dress", etc.
+
+    Returns:
+        Binary mask (HxW uint8, 0/255)
+    """
+    # Step 1: Generate base mask
+    base_mask = _generate_agnostic_mask(parse_map, category)
+    kernel = np.ones((15, 15), np.uint8)
+    base_mask = cv2.dilate(base_mask, kernel, iterations=2)
+    base_mask = cv2.GaussianBlur(base_mask, (11, 11), 0)
+    _, base_mask = cv2.threshold(base_mask, 127, 255, cv2.THRESH_BINARY)
+
+    # Step 2: Check coverage
+    coverage = (base_mask > 0).sum() / base_mask.size
+
+    # Step 3: Back view detection (no face → force Rect)
+    has_face = (parse_map == 11).any()
+    if not has_face:
+        logger.info(f"Adaptive mask: No face detected (back view) → Upper Body Rect")
+        return _make_upper_body_rect_mask(parse_map, category)
+
+    # Step 4: Tight-fitting clothes detection
+    # Generate raw mask without dilation to check base coverage
+    raw_clothes = _generate_agnostic_mask(parse_map, category)
+    raw_coverage = (raw_clothes > 0).sum() / raw_clothes.size
+
+    # Very low raw coverage → clothes not detected properly → force Rect
+    if raw_coverage < 0.05:
+        logger.info(f"Adaptive mask: Very low raw coverage {raw_coverage*100:.1f}% → Upper Body Rect")
+        return _make_upper_body_rect_mask(parse_map, category)
+
+    # Step 5: Coverage threshold check (raised from 15% to 25%)
+    if coverage >= 0.25:
+        logger.debug(f"Adaptive mask: Using base FASHN mask (coverage {coverage*100:.1f}%)")
+        return base_mask
+
+    # Step 6: Switch to Mask B (Upper Body Rect)
+    logger.info(f"Adaptive mask: Coverage {coverage*100:.1f}% < 25% → Upper Body Rect")
+    return _make_upper_body_rect_mask(parse_map, category)
+
+
+def _make_upper_body_rect_mask(parse_map: np.ndarray, category: str = "top") -> np.ndarray:
+    """Upper Body Rect mask: bounding box + shoulder/collarbone expansion.
+
+    This is Mask B from v6 testing — effective for tight-fitting clothing,
+    back views, and sitting poses where standard FASHN mask is too narrow.
+
+    Args:
+        parse_map: FASHN parse map (HxW uint8, class IDs)
+        category: "top", "bottom", "dress", etc.
+
+    Returns:
+        Binary mask (HxW uint8, 0/255)
+    """
+    if category in ("top", "outerwear"):
+        clothes_classes = [4]   # upper_clothes
+        arm_classes = [14, 15]  # arms
+    elif category in ("bottom", "lower"):
+        clothes_classes = [6, 5]  # pants, skirt
+        arm_classes = [12, 13]    # legs
+    elif category == "dress":
+        clothes_classes = [7, 4]  # dress + upper
+        arm_classes = [14, 15, 12, 13]  # arms + legs
+    else:
+        clothes_classes = [4]
+        arm_classes = [14, 15]
+
+    clothes_mask = np.zeros(parse_map.shape[:2], dtype=np.uint8)
+    for cls in clothes_classes:
+        clothes_mask[parse_map == cls] = 255
+
+    arms_mask = np.zeros(parse_map.shape[:2], dtype=np.uint8)
+    for cls in arm_classes:
+        arms_mask[parse_map == cls] = 255
+
+    combined = np.maximum(clothes_mask, arms_mask)
+
+    ys, xs = np.where(combined > 0)
+    if len(ys) == 0:
+        # No clothes/arms detected → use full image mask
+        logger.warning("Upper Body Rect: No clothing detected, using full mask")
+        return np.ones(parse_map.shape[:2], dtype=np.uint8) * 255
+
+    y_min, y_max = ys.min(), ys.max()
+    x_min, x_max = xs.min(), xs.max()
+
+    # Extend upward 30% (shoulders/collarbone region)
+    height = y_max - y_min
+    y_min = max(0, y_min - int(height * 0.3))
+
+    # Extend left/right 10%
+    width = x_max - x_min
+    x_min = max(0, x_min - int(width * 0.1))
+    x_max = min(parse_map.shape[1] - 1, x_max + int(width * 0.1))
+
+    # Create rectangular mask
+    rect_mask = np.zeros(parse_map.shape[:2], dtype=np.uint8)
+    rect_mask[y_min:y_max, x_min:x_max] = 255
+
+    # Smooth edges for natural blending
+    rect_mask = cv2.GaussianBlur(rect_mask, (21, 21), 0)
+    _, rect_mask = cv2.threshold(rect_mask, 127, 255, cv2.THRESH_BINARY)
+
+    rect_coverage = (rect_mask > 0).sum() / rect_mask.size
+    logger.debug(f"Upper Body Rect: bbox=[{y_min}:{y_max}, {x_min}:{x_max}], "
+                f"coverage {rect_coverage*100:.1f}%")
+
+    return rect_mask
+
+
 def _apply_p2p_mask_expansion(mask: np.ndarray,
                                expansion_factor: float) -> np.ndarray:
     """Apply P2P elasticity-aware mask expansion/contraction."""
@@ -277,7 +406,7 @@ async def generate_fitting(
 
         if use_catvton and person_at_angle is not None:
             # Primary path: CatVTON-FLUX
-            agnostic_mask = _generate_agnostic_mask(
+            agnostic_mask = _generate_adaptive_mask(
                 _parse_person_image(person_at_angle), category
             )
 

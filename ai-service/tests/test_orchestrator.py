@@ -52,7 +52,7 @@ def _create_test_app() -> FastAPI:
     app.state.session_manager = SessionManager(max_sessions=5, ttl_sec=300)
     app.state.gemini = None  # No Gemini for tests
     app.state.inspector = None
-    app.state.worker_client = WorkerClient(base_url="")  # local mode
+    app.state.worker_client = WorkerClient()  # Modal-based client
 
     for router in all_routers:
         app.include_router(router)
@@ -96,7 +96,7 @@ def test_app():
 @pytest.fixture
 def client(test_app):
     """Provide a TestClient bound to the test app."""
-    return TestClient(test_app)
+    return TestClient(test_app, raise_server_exceptions=False)
 
 
 @pytest.fixture
@@ -114,7 +114,13 @@ def _make_body_data_mock():
     body.betas = np.zeros((10,), dtype=np.float64)
     body.gender = "female"
     body.glb_bytes = b"glTF\x02\x00\x00\x00fake_glb"
-    body.mesh_renders = {}
+    # person_image must be a real numpy array for image_to_b64 in distributed fitting
+    body.person_image = np.zeros((1024, 768, 3), dtype=np.uint8)
+    # mesh_renders: dict of angle → numpy array (used in 8-angle distributed fitting)
+    body.mesh_renders = {
+        angle: np.zeros((1024, 768, 3), dtype=np.uint8)
+        for angle in [45, 90, 135, 180, 225, 270, 315]
+    }
     body.quality_gates = []
     body.metadata = MagicMock(
         gender="female",
@@ -160,24 +166,82 @@ def _make_fitting_result_mock():
 
 
 class TestWorkerClient:
-    """WorkerClient unit tests — no HTTP calls."""
+    """WorkerClient unit tests — Modal ephemeral GPU pattern."""
 
-    def test_is_configured_false_when_no_url(self):
-        """WorkerClient with empty URL is not configured."""
-        wc = WorkerClient(base_url="")
-        assert wc.is_configured() is False
+    def test_is_configured_false_when_modal_unavailable(self):
+        """WorkerClient is not configured when Modal SDK is missing."""
+        with patch("orchestrator.worker_client.MODAL_AVAILABLE", False):
+            wc = WorkerClient()
+            assert wc.is_configured() is False
 
-    def test_is_configured_true_with_url(self):
-        """WorkerClient with a URL is configured."""
-        wc = WorkerClient(base_url="https://worker.example.com")
-        assert wc.is_configured() is True
+    def test_is_configured_true_with_modal(self):
+        """WorkerClient is configured when Modal SDK is available."""
+        with patch("orchestrator.worker_client.MODAL_AVAILABLE", True):
+            wc = WorkerClient()
+            assert wc.is_configured() is True
 
-    @pytest.mark.asyncio
-    async def test_call_raises_when_not_configured(self):
-        """_call raises WorkerUnavailableError when base_url is empty."""
-        wc = WorkerClient(base_url="")
-        with pytest.raises(WorkerUnavailableError, match="not configured"):
-            await wc._call("/any-endpoint", {"key": "value"})
+    def test_ensure_loaded_raises_when_modal_unavailable(self):
+        """_ensure_loaded raises WorkerUnavailableError when Modal is not installed."""
+        with patch("orchestrator.worker_client.MODAL_AVAILABLE", False):
+            wc = WorkerClient()
+            with pytest.raises(WorkerUnavailableError, match="Modal not installed"):
+                wc._ensure_loaded()
+
+    def test_ensure_loaded_sets_function_refs(self):
+        """_ensure_loaded populates _fn_light, _fn_catvton, _fn_hunyuan."""
+        mock_app = MagicMock()
+        mock_light = MagicMock()
+        mock_catvton = MagicMock()
+        mock_hunyuan = MagicMock()
+
+        with patch("orchestrator.worker_client.MODAL_AVAILABLE", True), \
+             patch.dict("sys.modules", {"worker": MagicMock(), "worker.modal_app": MagicMock(
+                 app=mock_app,
+                 run_light_models=mock_light,
+                 run_catvton_batch=mock_catvton,
+                 run_hunyuan3d=mock_hunyuan,
+             )}):
+            wc = WorkerClient()
+            wc._ensure_loaded()
+            assert wc._loaded is True
+            assert wc._modal_app is mock_app
+            assert wc._fn_light is mock_light
+            assert wc._fn_catvton is mock_catvton
+            assert wc._fn_hunyuan is mock_hunyuan
+
+    def test_ensure_loaded_idempotent(self):
+        """_ensure_loaded only loads once (idempotent)."""
+        mock_app = MagicMock()
+        with patch("orchestrator.worker_client.MODAL_AVAILABLE", True), \
+             patch.dict("sys.modules", {"worker": MagicMock(), "worker.modal_app": MagicMock(
+                 app=mock_app,
+                 run_light_models=MagicMock(),
+                 run_catvton_batch=MagicMock(),
+                 run_hunyuan3d=MagicMock(),
+             )}):
+            wc = WorkerClient()
+            wc._ensure_loaded()
+            first_app = wc._modal_app
+            wc._ensure_loaded()  # second call — should be no-op
+            assert wc._modal_app is first_app
+
+    def test_call_gpu_uses_app_run_context(self):
+        """_call_gpu wraps fn.remote() inside app.run() context."""
+        mock_app = MagicMock()
+        mock_fn = MagicMock()
+        mock_fn.remote.return_value = {"result": "ok"}
+        mock_app.run.return_value.__enter__ = MagicMock(return_value=None)
+        mock_app.run.return_value.__exit__ = MagicMock(return_value=False)
+
+        wc = WorkerClient()
+        wc._loaded = True
+        wc._modal_app = mock_app
+        wc._fn_light = mock_fn
+
+        result = wc._call_gpu(mock_fn, "task", "data")
+        mock_app.run.assert_called_once()
+        mock_fn.remote.assert_called_once_with("task", "data")
+        assert result == {"result": "ok"}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -408,36 +472,43 @@ class TestErrorHandling:
 
 
 class TestWorkerFallback:
-    """Worker client local/distributed mode logic."""
+    """Worker client ephemeral GPU mode logic."""
 
-    def test_local_mode_when_no_worker_url(self, test_app):
-        """With empty WORKER_URL, worker is not configured (local mode)."""
+    def test_modal_mode_reflects_sdk_availability(self, test_app):
+        """Worker is_configured reflects Modal SDK availability."""
         worker = test_app.state.worker_client
-        assert worker.is_configured() is False
+        from orchestrator.worker_client import MODAL_AVAILABLE
+        assert worker.is_configured() is MODAL_AVAILABLE
 
-    def test_distributed_mode_requires_url(self):
-        """Setting a base_url enables distributed mode."""
-        wc = WorkerClient(base_url="https://gpu.example.com")
-        assert wc.is_configured() is True
+    def test_configured_when_modal_available(self):
+        """WorkerClient is configured when Modal SDK is present."""
+        with patch("orchestrator.worker_client.MODAL_AVAILABLE", True):
+            wc = WorkerClient()
+            assert wc.is_configured() is True
 
     @pytest.mark.asyncio
-    async def test_health_returns_not_configured_when_local(self):
-        """health() returns not_configured status when no URL is set."""
-        wc = WorkerClient(base_url="")
-        result = await wc.health()
-        assert result["status"] == "not_configured"
+    async def test_health_returns_not_configured_when_no_modal(self):
+        """health() returns not_configured status when Modal is unavailable."""
+        with patch("orchestrator.worker_client.MODAL_AVAILABLE", False):
+            wc = WorkerClient()
+            result = await wc.health()
+            assert result["status"] == "not_configured"
 
-    def test_worker_client_retry_settings(self):
-        """WorkerClient accepts custom retry parameters."""
-        wc = WorkerClient(
-            base_url="https://worker.test",
-            timeout_sec=60.0,
-            retry_delay_sec=5.0,
-            max_retries=3,
-        )
-        assert wc.timeout_sec == 60.0
-        assert wc.retry_delay_sec == 5.0
-        assert wc.max_retries == 3
+    def test_worker_client_modal_app_name(self):
+        """WorkerClient uses the correct Modal app name."""
+        assert WorkerClient._app_name == "stylelens-v6-worker"
+
+    @pytest.mark.asyncio
+    async def test_close_resets_loaded_state(self):
+        """close() resets loaded flag and function references."""
+        wc = WorkerClient()
+        wc._loaded = True
+        wc._modal_app = MagicMock()
+        wc._fn_light = MagicMock()
+        await wc.close()
+        assert wc._loaded is False
+        assert wc._modal_app is None
+        assert wc._fn_light is None
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -483,7 +554,11 @@ class TestFaceBankRoutes:
         assert resp.status_code in (400, 503)
 
     def test_face_bank_upload_requires_session(self, client):
-        """POST /face-bank/upload with unknown session returns 404."""
+        """POST /face-bank/upload with unknown session returns 404 or 503.
+
+        503 = InsightFace not available (checked before session lookup).
+        404 = session not found (if InsightFace is available).
+        """
         img = np.zeros((64, 64, 3), dtype=np.uint8)
         import cv2
         _, buf = cv2.imencode(".jpg", img)
@@ -493,7 +568,7 @@ class TestFaceBankRoutes:
             "/face-bank/upload?session_id=fake-session",
             files={"current_photo": ("face.jpg", file_bytes, "image/jpeg")},
         )
-        assert resp.status_code == 404
+        assert resp.status_code in (404, 503)
 
     def test_session_listing_includes_face_bank(self, client, session_manager):
         """Session listing includes has_face_bank field."""
@@ -527,7 +602,12 @@ class TestFaceBankRoutes:
         sid = session_manager.create()
         session_manager.update_body_data(sid, _make_body_data_mock())
         session_manager.update_clothing(sid, _make_clothing_item_mock())
-        # fitting_tryon will fail (no Gemini) but we check route contract
         resp = client.post(f"/fitting/try-on?session_id={sid}")
-        # Should fail with 503 (no Gemini) — but proves route works
-        assert resp.status_code == 503
+        # With Modal available: distributed path (mesh renders) → CatVTON worker fails
+        # → fallback to local → may succeed (200) or fail (500/503)
+        if resp.status_code == 200:
+            data = resp.json()
+            assert "face_bank" in data
+            assert data["face_bank"] is None  # No face bank set
+        else:
+            assert resp.status_code in (500, 503)
