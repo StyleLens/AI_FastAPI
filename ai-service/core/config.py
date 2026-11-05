@@ -5,9 +5,15 @@ All model paths, device config, pipeline constants.
 
 import importlib
 import os
-import torch
 from pathlib import Path
 from dotenv import load_dotenv
+
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    torch = None
+    TORCH_AVAILABLE = False
 
 
 def _has_package(name: str) -> bool:
@@ -34,12 +40,18 @@ else:
     MODEL_DIR = Path("/models")
 
 # ── Device ─────────────────────────────────────────────────────
-if IS_LOCAL_DEV:
+if TORCH_AVAILABLE and IS_LOCAL_DEV:
     DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
-else:
+    DTYPE = torch.float32
+    HAS_CUDA = torch.cuda.is_available()
+elif TORCH_AVAILABLE and not IS_LOCAL_DEV:
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.float32  # fp16 unstable on MPS
-HAS_CUDA = torch.cuda.is_available()
+    DTYPE = torch.float32
+    HAS_CUDA = torch.cuda.is_available()
+else:
+    DEVICE = "cpu"
+    DTYPE = None
+    HAS_CUDA = False
 
 # ── MPS Fallback Strategy ─────────────────────────────────
 # CUDA가 없는 환경(M4 Mac 등)에서도 모든 파이프라인을 테스트 가능하도록

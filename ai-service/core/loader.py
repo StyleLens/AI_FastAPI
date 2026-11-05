@@ -8,7 +8,10 @@ import logging
 import time
 from typing import Any
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 from core.config import (
     BASE_DIR, DEVICE, DTYPE, HAS_CUDA,
@@ -48,10 +51,11 @@ class ModelRegistry:
     def _clear_cache(self):
         """Free MPS/CUDA memory."""
         gc.collect()
-        if torch.backends.mps.is_available():
-            torch.mps.empty_cache()
-        elif torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        if torch is not None:
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+            elif torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def unload(self, name: str):
         """Unload a model and free memory."""

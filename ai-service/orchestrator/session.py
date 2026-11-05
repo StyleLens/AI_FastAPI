@@ -4,11 +4,12 @@ Replaces the module-level globals from main.py with proper session tracking.
 Supports multiple concurrent pipeline sessions with TTL-based cleanup.
 """
 
+import asyncio
 import time
 import uuid
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Callable
 
 from core.pipeline import BodyData
 from core.wardrobe import ClothingItem
@@ -55,6 +56,31 @@ class SessionManager:
         self._sessions: dict[str, PipelineSession] = {}
         self._max_sessions = max_sessions
         self._ttl_sec = ttl_sec
+        self._listeners: dict[str, set[asyncio.Queue]] = {}
+
+    def subscribe(self, session_id: str) -> asyncio.Queue:
+        """Subscribe to progress and status events for a session."""
+        q = asyncio.Queue()
+        if session_id not in self._listeners:
+            self._listeners[session_id] = set()
+        self._listeners[session_id].add(q)
+        return q
+
+    def unsubscribe(self, session_id: str, q: asyncio.Queue):
+        """Unsubscribe from session events."""
+        if session_id in self._listeners:
+            self._listeners[session_id].discard(q)
+            if not self._listeners[session_id]:
+                del self._listeners[session_id]
+
+    def _broadcast(self, session_id: str, event: dict):
+        """Broadcast event to all subscribed listeners for this session."""
+        if session_id in self._listeners:
+            for q in list(self._listeners[session_id]):
+                try:
+                    q.put_nowait(event)
+                except Exception:
+                    pass
 
     def create(self) -> str:
         """Create a new session, evicting oldest if at capacity.
@@ -111,11 +137,19 @@ class SessionManager:
             return False
 
     def update_status(self, session_id: str, phase: str, status: str,
-                      progress: float = 0.0):
+                      progress: float = 0.0, message: str = ""):
         """Update phase status and progress."""
         session = self.get(session_id)
         session.status[phase] = status
         session.progress[phase] = progress
+        self._broadcast(session_id, {
+            "type": "progress",
+            "phaseId": phase,
+            "status": status,
+            "progress": progress,
+            "message": message or f"{phase} is {status}",
+            "timestamp": time.time(),
+        })
 
     def update_body_data(self, session_id: str, body_data: BodyData):
         """Store Phase 1 result."""
@@ -123,6 +157,14 @@ class SessionManager:
         session.body_data = body_data
         session.status["phase1"] = "done"
         session.progress["phase1"] = 1.0
+        self._broadcast(session_id, {
+            "type": "phase_complete",
+            "phaseId": "phase1",
+            "status": "done",
+            "progress": 1.0,
+            "has_mesh": body_data.vertices is not None,
+            "timestamp": time.time(),
+        })
 
     def update_clothing(self, session_id: str, item: ClothingItem):
         """Store Phase 2 result."""
@@ -130,6 +172,14 @@ class SessionManager:
         session.clothing_item = item
         session.status["phase2"] = "done"
         session.progress["phase2"] = 1.0
+        self._broadcast(session_id, {
+            "type": "phase_complete",
+            "phaseId": "phase2",
+            "status": "done",
+            "progress": 1.0,
+            "category": item.analysis.category if item.analysis else "",
+            "timestamp": time.time(),
+        })
 
     def update_fitting(self, session_id: str, result: FittingResult):
         """Store Phase 3 result."""
@@ -137,6 +187,14 @@ class SessionManager:
         session.fitting_result = result
         session.status["phase3"] = "done"
         session.progress["phase3"] = 1.0
+        self._broadcast(session_id, {
+            "type": "phase_complete",
+            "phaseId": "phase3",
+            "status": "done",
+            "progress": 1.0,
+            "angle_count": len(result.tryon_images),
+            "timestamp": time.time(),
+        })
 
     def update_viewer3d(self, session_id: str, result: Viewer3DResult):
         """Store Phase 4 result."""
@@ -144,6 +202,14 @@ class SessionManager:
         session.viewer3d_result = result
         session.status["phase4"] = "done"
         session.progress["phase4"] = 1.0
+        self._broadcast(session_id, {
+            "type": "phase_complete",
+            "phaseId": "phase4",
+            "status": "done",
+            "progress": 1.0,
+            "glb_id": result.glb_id,
+            "timestamp": time.time(),
+        })
 
     def update_face_bank(self, session_id: str, face_bank: FaceBank):
         """Store Face Bank for a session."""

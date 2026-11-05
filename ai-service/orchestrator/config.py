@@ -5,15 +5,9 @@ Environment-based config for Tier 3 orchestrator.
 
 import os
 
-# ── GPU Worker (Tier 4) — Modal remote call ────────────────────
-# Modal SDK가 설치되어 있으면 GPU 작업을 Modal H200에 위임.
-# app.run() → fn.remote() 방식 (배포 없이 ephemeral GPU 호출).
-# Modal Worker: SDK 설치 여부로 자동 감지
-try:
-    import modal  # noqa: F401
-    MODAL_AVAILABLE = True
-except ImportError:
-    MODAL_AVAILABLE = False
+# ── GPU Worker (Tier 4) ─────────────────────────────────────────
+# FastAPI 오케스트레이터(CPU) 단일화 모드로 동작 (Worker 비활성화)
+MODAL_AVAILABLE = False
 
 # ── Session Management ────────────────────────────────────────
 SESSION_MAX = int(os.getenv("SESSION_MAX", "10"))

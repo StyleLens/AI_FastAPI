@@ -21,6 +21,15 @@ import cv2
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.sw_renderer import render_mesh
+import pytest
+
+
+@pytest.fixture
+def glb_path(tmp_path):
+    capsule = trimesh.creation.capsule(height=1.7, radius=0.15)
+    file_path = tmp_path / "test_body.glb"
+    capsule.export(str(file_path), file_type="glb")
+    return str(file_path)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

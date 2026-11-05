@@ -6,10 +6,13 @@ Primary engine for Phase 3 fitting.
 
 import logging
 import time
-from typing import Optional
+from typing import Optional, Any
 
 import numpy as np
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 from PIL import Image
 
 from core.config import (
@@ -36,7 +39,7 @@ class CatVTONFluxPipeline:
     @classmethod
     def from_pretrained(cls, flux_gguf_path: str, catvton_lora_dir: str,
                         catvton_attn_dir: str, device: str = DEVICE,
-                        dtype: torch.dtype = DTYPE) -> "CatVTONFluxPipeline":
+                        dtype: Any = DTYPE) -> "CatVTONFluxPipeline":
         """
         Load CatVTON-FLUX from pretrained weights.
 

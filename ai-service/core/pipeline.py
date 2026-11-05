@@ -11,7 +11,10 @@ from typing import Optional
 
 import cv2
 import numpy as np
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 from core.config import (
     DEVICE, YOLO26_CONF_THRESHOLD,

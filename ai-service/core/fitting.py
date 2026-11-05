@@ -234,13 +234,19 @@ def _apply_p2p_mask_expansion(mask: np.ndarray,
 
 def _parse_person_image(person_image: np.ndarray) -> np.ndarray:
     """Parse person image using FASHN Parser to get body segmentation."""
-    import torch
-
     if not FASHN_PARSER_ENABLED:
         # Simple fallback: assume center region is person
         h, w = person_image.shape[:2]
         mask = np.zeros((h, w), dtype=np.uint8)
         mask[int(h*0.1):int(h*0.9), int(w*0.2):int(w*0.8)] = 4  # upper_clothes
+        return mask
+
+    try:
+        import torch
+    except ImportError:
+        h, w = person_image.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        mask[int(h*0.1):int(h*0.9), int(w*0.2):int(w*0.8)] = 4
         return mask
 
     fashn = registry.load_fashn_parser()
@@ -423,38 +429,47 @@ async def generate_fitting(
             result.tryon_images[angle] = tryon_bgr
             result.method_used[angle] = "catvton-flux"
         else:
-            # Fallback: Gemini image generation (with P2P physics prompt)
-            if angle == 0:
-                tryon = generate_front_view_gemini(
-                    gemini, face_photo, clothing_img,
-                    clothing_item.analysis,
-                    mesh_ref,  # None when blank capsule render
-                    body_data.gender,
-                    physics_prompt=physics_prompt,
-                    face_references=angle_face_refs,
-                )
-                if tryon is not None:
-                    front_result = tryon
-                    result.tryon_images[angle] = tryon
-                    result.method_used[angle] = "gemini-front"
-            else:
-                if front_result is not None:
-                    tryon = generate_angle_with_reference(
-                        gemini, front_result, face_photo,
+            # Fallback: Gemini image generation (with P2P physics prompt) if Gemini configured
+            if gemini is not None:
+                if angle == 0:
+                    tryon = generate_front_view_gemini(
+                        gemini, face_photo, clothing_img,
                         clothing_item.analysis,
                         mesh_ref,  # None when blank capsule render
-                        angle, body_data.gender,
+                        body_data.gender,
                         physics_prompt=physics_prompt,
                         face_references=angle_face_refs,
                     )
                     if tryon is not None:
+                        front_result = tryon
                         result.tryon_images[angle] = tryon
-                        result.method_used[angle] = "gemini-angle"
+                        result.method_used[angle] = "gemini-front"
+                else:
+                    if front_result is not None:
+                        tryon = generate_angle_with_reference(
+                            gemini, front_result, face_photo,
+                            clothing_item.analysis,
+                            mesh_ref,  # None when blank capsule render
+                            angle, body_data.gender,
+                            physics_prompt=physics_prompt,
+                            face_references=angle_face_refs,
+                        )
+                        if tryon is not None:
+                            result.tryon_images[angle] = tryon
+                            result.method_used[angle] = "gemini-angle"
 
-            # If both failed, use mesh render (only if non-blank)
-            if angle not in result.tryon_images and mesh_ref is not None:
-                result.tryon_images[angle] = mesh_ref
-                result.method_used[angle] = "mesh-render"
+            # Fallback to mesh render or person image if Gemini skipped/failed
+            if angle not in result.tryon_images:
+                if person_at_angle is not None:
+                    result.tryon_images[angle] = person_at_angle
+                    result.method_used[angle] = "mesh-render"
+                elif base_person is not None:
+                    result.tryon_images[angle] = base_person
+                    result.method_used[angle] = "base-person"
+                else:
+                    # Final safe placeholder: blank canvas
+                    result.tryon_images[angle] = np.full((512, 512, 3), 245, dtype=np.uint8)
+                    result.method_used[angle] = "placeholder"
 
         # Face identity preservation (InsightFace post-hoc)
         # DISABLED: InsightFace face swap OVER Gemini output causes severe artifacts

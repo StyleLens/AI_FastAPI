@@ -18,6 +18,7 @@ from orchestrator.routes.visualization import router as visualization_router
 from orchestrator.routes.p2p import router as p2p_router
 from orchestrator.routes.quality import router as quality_router
 from orchestrator.routes.face_bank import router as face_bank_router
+from orchestrator.routes.progress import router as progress_router
 
 all_routers = [
     avatar_router,
@@ -28,6 +29,7 @@ all_routers = [
     p2p_router,
     quality_router,
     face_bank_router,
+    progress_router,
 ]
 
 __all__ = [
@@ -39,5 +41,6 @@ __all__ = [
     "p2p_router",
     "quality_router",
     "face_bank_router",
+    "progress_router",
     "all_routers",
 ]

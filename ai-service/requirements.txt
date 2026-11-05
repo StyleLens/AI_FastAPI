@@ -1,42 +1,38 @@
 # ============================================================
-# StyleLens V6 SOTA Pipeline — Requirements
-# 7 SOTA Models + Hunyuan3D 2.0 3D Viewer
-# Target: Apple M4 Pro 48GB (MPS)
+# StyleLens AI FastAPI Orchestrator — Requirements
 # ============================================================
 
-# Core
-fastapi>=0.115
-uvicorn[standard]>=0.34
+# Core API & Server
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
 python-multipart>=0.0.18
-python-dotenv>=1.0
+python-dotenv>=1.0.0
+websockets>=13.0
 
-# ML / Vision
-torch>=2.6
-torchvision>=0.21
-ultralytics>=8.4              # YOLO26-L (NMS-free person detection)
-transformers>=4.48            # SAM 3D Body DINOv3
-safetensors>=0.5
-accelerate>=1.3
-gguf>=0.4                     # FLUX.1-dev GGUF Q8 loader
+# Image & 3D Processing (CPU)
+opencv-python-headless>=4.10.0
+Pillow>=11.0.0
+numpy>=2.0.0
+trimesh>=4.6.0
+pygltflib>=1.16.0
 
-# CatVTON-FLUX (FLUX-based virtual try-on)
-diffusers>=0.32
-peft>=0.15
+# Gemini Multimodal API (Analysis & Feedback)
+google-genai>=1.5.0
 
-# Image / 3D
-opencv-python-headless>=4.10
-Pillow>=11.0
-numpy>=2.2
-trimesh>=4.6
-pygltflib>=1.16
+# Networking & Utilities
+aiohttp>=3.11.0
+beautifulsoup4>=4.12.0
 
-# Gemini
-google-genai>=1.5
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
+httpx>=0.28.0
 
-# Face (optional — for face identity preservation)
-insightface>=0.7
-onnxruntime>=1.20
-
-# Utils
-aiohttp>=3.11
-beautifulsoup4>=4.12
+# Optional Heavy ML Dependencies (For local GPU inference if available)
+# torch>=2.2.0
+# torchvision>=0.17.0
+# ultralytics>=8.4.0
+# diffusers>=0.32.0
+# transformers>=4.48.0
+# insightface>=0.7.3
+# onnxruntime>=1.20.0

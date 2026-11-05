@@ -10,7 +10,10 @@ from typing import Optional
 
 import cv2
 import numpy as np
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 from core.config import (
     DEVICE, FASHN_CLASSES,
@@ -132,7 +135,7 @@ def _extract_garment_mask(parse_map: np.ndarray,
 
 async def analyze_clothing(
     images: list[np.ndarray],
-    gemini: GeminiClient,
+    gemini: GeminiClient | None = None,
     size_chart_image: np.ndarray | None = None,
     product_info_images: list[np.ndarray] | None = None,
     fitting_model_image: np.ndarray | None = None,
@@ -146,7 +149,7 @@ async def analyze_clothing(
         1. SAM 3 concept-aware segmentation (clothing isolation)
         1.5. Gemini Gate 2 — body_segmentation
         2. FASHN 18-class parsing → garment mask per class
-        3. Gemini multi-image clothing analysis
+        3. Gemini multi-image clothing analysis (or heuristic fallback)
         3.5. Gemini Gate 4 — clothing_analysis
         4. Size chart / product info extraction (if provided)
     """
@@ -176,14 +179,31 @@ async def analyze_clothing(
     item.parse_map = parse_map
 
     # ── Step 3: Gemini Clothing Analysis ───────────────────────
-    logger.info("Phase 2 Step 3: Gemini clothing analysis")
+    logger.info("Phase 2 Step 3: Clothing analysis")
 
-    if len(processed) == 1:
-        item.analysis = gemini.analyze_detailed_fashion(processed[0])
+    if gemini is not None:
+        if len(processed) == 1:
+            item.analysis = gemini.analyze_detailed_fashion(processed[0])
+        else:
+            # Multi-image analysis with view classification
+            views = classify_and_analyze(processed, gemini)
+            item.analysis = merge_analyses(views)
     else:
-        # Multi-image analysis with view classification
-        views = classify_and_analyze(processed, gemini)
-        item.analysis = merge_analyses(views)
+        logger.info("Gemini not configured — using heuristic clothing analysis")
+        item.analysis = ClothingAnalysis(
+            name="Analyzed Garment",
+            category="top",
+            color="neutral",
+            color_hex="#E0E0E0",
+            fabric="cotton blend",
+            fit_type="regular",
+            neck_style="crewneck",
+            sleeve_type="short",
+            thickness="moderate",
+            elasticity="moderate",
+            fabric_composition="100% cotton",
+            body_interaction="standard drape",
+        )
 
     # ── Step 3.5: Gemini Gate 4 — Clothing Analysis ────────────
     if inspector:
@@ -195,15 +215,15 @@ async def analyze_clothing(
             logger.warning(f"Gate 4 failed: {gate4.feedback}")
 
     # ── Step 4: Size Chart / Product Info ──────────────────────
-    if size_chart_image is not None:
+    if size_chart_image is not None and gemini is not None:
         logger.info("Phase 2 Step 4a: Size chart extraction")
         item.size_chart = gemini.analyze_size_chart_image(size_chart_image)
 
-    if product_info_images:
+    if product_info_images and gemini is not None:
         logger.info("Phase 2 Step 4b: Product info extraction")
         item.product_info = gemini.analyze_product_info_images(product_info_images)
 
-    if fitting_model_image is not None:
+    if fitting_model_image is not None and gemini is not None:
         logger.info("Phase 2 Step 4c: Fitting model info extraction")
         item.fitting_model_info = gemini.extract_fitting_model_info(fitting_model_image)
 

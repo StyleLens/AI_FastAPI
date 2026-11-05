@@ -1,131 +1,172 @@
-# StyleLens AI Server -- 360도 가상 피팅 + 3D 바디 복원 시스템
+# StyleLens AI FastAPI Server — 360도 가상 피팅 & 3D 체형 분석 시스템
 
-사용자 사진 한 장에서 3D 바디 메쉬를 복원하고, 8개 각도의 가상 피팅 이미지를 생성하는 AI 파이프라인이다.
-4-Tier 분산 아키텍처로 설계되어 있으며, GPU 연산은 Modal 서버리스 인프라에 위임한다.
+사용자 사진 한 장에서 3D 바디 메쉬를 복원하고, 8개 각도(0°~315°)의 가상 피팅 및 물리 기반 핏(P2P, Physics-to-Prompt) 분석을 제공하는 고성능 AI FastAPI 서버이다.
+CPU 기반 독립 실행(Standalone) 및 실시간 WebSocket 진행률 스트리밍을 지원한다.
 
+---
 
-## 아키텍처
+## 주요 화면 및 결과물
+
+### 1. 테스트 콘솔 웹 UI (`/ui`)
+브라우저에서 직접 아바타 생성, 의류 분석, 8각도 피팅, 3D 뷰어, P2P 핏 분석을 단계별로 테스트할 수 있는 대화형 콘솔이다.
+
+![StyleLens Test Console UI](docs/images/test_console_ui.png)
+
+### 2. FastAPI 대화형 API 문서 (`/docs`)
+Swagger UI를 통해 모든 엔드포인트의 입출력 스펙과 실시간 테스트를 지원한다.
+
+![StyleLens Swagger Docs](docs/images/api_swagger_docs.png)
+
+### 3. 3D 바디 메쉬 8각도 렌더링 (0° ~ 315°)
+사용자의 신체 메타데이터(키, 몸무게, 컵 사이즈, 체형)를 반영하여 CPU 소프트웨어 렌더러로 생성한 8개 각도의 Depth 맵과 3D GLB 아바타 메쉬이다.
+
+![3D Body Mesh 8-Angle Renders](docs/images/avatar_3d_mesh_render.png)
+
+### 4. P2P (Physics-to-Prompt) 물리 기반 핏 분석
+신체 측정치(어깨, 가슴, 허리, 엉덩이)와 의류 실측 치수 간의 물리적 델타를 계산하여 부위별 조임 정도(Tightness)와 물리 시뮬레이션 프롬프트를 도출한다.
+
+![P2P Fit Analysis](docs/images/p2p_fit_analysis.png)
+
+---
+
+## 시스템 아키텍처
 
 ```
 Frontend (React 19 + Three.js)
-    |
-Backend (Spring Boot, JWT/S3)
-    |
-Orchestrator (FastAPI, CPU)        <-- 이 저장소
-    |
-GPU Worker (Modal, H200 141GB)
+    │
+    ▼ (REST / WebSocket)
+FastAPI Orchestrator (CPU / PyTorch / Trimesh)
+    ├── Phase 1: 아바타 생성 (3D 메쉬 복원 & 8각도 렌더링, GLB 생성)
+    ├── Phase 2: 의류 분석 (SAM3 마스킹 & FASHN 파싱)
+    ├── Phase 3: 가상 피팅 (8각도 착용 시각화)
+    ├── Phase 4: 3D 뷰어 (Trimesh 3D GLB 내보내기)
+    ├── Phase 5: P2P 물리 기반 핏 분석 엔진
+    └── WebSocket: 실시간 파이프라인 진행률 스트리밍 (/ws/progress)
 ```
 
-Orchestrator는 전체 파이프라인을 조율하는 중앙 컨트롤러 역할을 한다.
-체형 분석, 메쉬 렌더링 등 CPU 작업은 직접 처리하고, SDXL/VTON/Face Swap 등 GPU 작업은 Modal Worker에 위임한다.
-
+---
 
 ## 파이프라인 흐름
 
 ```mermaid
-graph LR
-    A[사용자 사진] --> B[SAM 3D Body]
-    B --> C[CPU 메쉬 렌더링]
-    C --> D[SDXL + ControlNet Depth]
-    D --> E[FLUX.2-klein 리파인]
-    E --> F[FASHN VTON v1.5]
-    F --> G[InsightFace Face Swap]
-    G --> H[8각도 피팅 결과]
+graph TD
+    A["사용자 사진 / 체형 정보"] --> B["Phase 1: 3D 메쉬 생성"]
+    B --> C["Phase 1R: CPU 8각도 Depth 렌더링 (0°~315°)"]
+    D["의류 이미지 / 사이즈 차트"] --> E["Phase 2: 의류 세그멘테이션 & 분석"]
+    C --> F["Phase 3: 8각도 가상 피팅"]
+    E --> F
+    B --> G["Phase 5: P2P 물리 핏 분석"]
+    E --> G
+    F --> H["Phase 4: 3D GLB 뷰어 모델"]
+    G --> H
+    F --> I["최종 피팅 결과 및 핏 리포트"]
 ```
 
-| Phase | 설명 | 실행 위치 |
+| Phase | 설명 | 세부 구현 |
 |-------|------|----------|
-| Phase 1 | SAM 3D Body로 사진에서 3D 메쉬 복원 | GPU Worker |
-| Phase 1R | CPU 소프트웨어 렌더러로 8각도 depth map 생성 | Orchestrator |
-| Phase 1.5A | SDXL + ControlNet Depth로 사실적 인체 이미지 생성 | GPU Worker |
-| Phase 1.5B | FLUX.2-klein-4B img2img 텍스처 리파인 (선택) | GPU Worker |
-| Phase 3 | FASHN VTON v1.5로 의류 가상 착용 | GPU Worker |
-| Phase 4 | InsightFace antelopev2로 얼굴 일관성 유지 | GPU Worker |
-| Phase 5 | P2P(Physics-to-Prompt) 핏 분석 | Orchestrator |
+| **Phase 1: Avatar** | 사용자 신체 스펙 반영 3D 메쉬 복원 | Trimesh + 체형 변형(컵 사이즈, 어깨 보정) |
+| **Phase 1R: Render** | 8개 각도 소프트웨어 렌더링 | NumPy 기반 CPU Depth 렌더러 (0° ~ 315°) |
+| **Phase 2: Wardrobe** | 의류 마스크 및 카테고리/소재 분석 | SAM3 분할 + FASHN 파싱 (휴리스틱 Fallback 지원) |
+| **Phase 3: Fitting** | 8각도 가상 피팅 이미지 생성 | 8각도 실루엣 정합 및 착용 시각화 |
+| **Phase 4: Viewer3D** | 3D 웹 뷰어용 바이너리 생성 | 표준 GLTF/GLB 포맷 바이너리 다운로드 |
+| **Phase 5: P2P Engine** | 물리 기반 치수 차이 핏 분석 | 신체-의류 치수 차이(Delta), 조임도 분류, 마스크 신축 보정 |
+| **Progress WS** | 실시간 파이프라인 진행 상황 전송 | WebSocket (`/ws/progress/{session_id}`) & SSE |
 
+---
 
 ## 주요 기능
 
-- **360도 가상 피팅**: 8개 각도(0~315도, 45도 간격)에서 의류 착용 이미지를 생성한다.
-- **체형 반영 메쉬 변형**: 컵 사이즈별 가슴 볼륨 조절, 자세 보정, 팔 접기 등을 적용한다.
-- **동적 ControlNet 스케일**: 체형에 따라 cn_scale을 자동 조정하여 VTON 단계에서 실루엣을 보존한다.
-- **얼굴 일관성 유지**: InsightFace 기반 face swap으로 모든 각도에서 동일한 얼굴을 유지한다.
-- **P2P 핏 분석**: 체형-의류 치수 차이를 물리 기반으로 분석하여 핏 프롬프트를 생성한다.
-- **FLUX 리파인 선택적 적용**: config 플래그로 FLUX 단계를 on/off 전환하여 비용을 제어한다.
+1. **360도 가상 피팅 & 8각도 뷰**: 45도 간격의 8개 각도(0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°) 렌더링.
+2. **체형 반영 3D 메쉬 변형**: A~H 컵 사이즈별 가슴 볼륨 조절, 체질량지수(BMI) 기반 프로포션 자동 스케일링.
+3. **P2P (Physics-to-Prompt) 핏 분석**:
+   - 어깨, 가슴, 허리, 엉덩이, 소매 등 주요 부위별 실측 차이 계산.
+   - `critical_tight`, `tight`, `optimal`, `loose`, `very_loose` 5단계 핏 분류.
+   - 의류 신축성(Elasticity)에 따른 동적 마스크 확장 계수(Mask Expansion Factor) 산출.
+4. **실시간 WebSocket 스트리밍**: 각 Phase 진행 상태 및 진행률(0.0~1.0)을 클라이언트에 실시간 브로드캐스트.
+5. **독립 실행 (Standalone) CPU 모드**: 무거운 GPU 의존성 없이 표준 CPU 환경에서 전체 파이프라인과 API가 안정적으로 구동.
 
-
-## 기술 스택
-
-| 분류 | 기술 | 용도 |
-|------|------|------|
-| Orchestrator | FastAPI + Uvicorn | 비동기 API 서버 |
-| GPU Worker | Modal Serverless (H200) | AI 모델 실행 |
-| 3D 복원 | SAM 3D Body DINOv3 | 단일 사진 3D 메쉬 복원 |
-| 이미지 생성 | SDXL + ControlNet Depth | depth 기반 사실적 인체 생성 |
-| 텍스처 리파인 | FLUX.2-klein-4B | img2img 질감 개선 (선택) |
-| 가상 착용 | FASHN VTON v1.5 | maskless 의류 합성 |
-| 얼굴 보존 | InsightFace antelopev2 | 각도별 face swap |
-| 메쉬 렌더링 | NumPy CPU Renderer | 소프트웨어 기반 depth map 생성 |
-| 핏 분석 | P2P Engine | 물리 기반 핏 프롬프트 변환 |
-
+---
 
 ## 실행 방법
 
+### 1. 가상환경 구성 및 패키지 설치
+
 ```bash
-# 1. 환경 설정
 cd ai-service
-python -m venv .venv
+
+# Python 3.11+ 권장
+python3 -m venv .venv
 source .venv/bin/activate
+
 pip install -r requirements.txt
-
-# 2. 환경 변수
-cp .env.example .env
-# .env.example 참고하여 API 키 설정
-
-# 3. Modal 인증 (GPU Worker 사용 시)
-pip install modal
-modal setup
-
-# 4. Orchestrator 실행
-python -m orchestrator.main
-# http://localhost:8000/docs 에서 API 확인
 ```
 
+### 2. 환경 변수 설정 (선택 사항)
+
+```bash
+cp .env.example .env
+# Gemini API 키 필요 시 설정 (미설정 시 자체 휴리스틱 엔진으로 자동 동작)
+```
+
+### 3. FastAPI 서버 실행
+
+```bash
+python -m orchestrator.main
+# 또는
+uvicorn orchestrator.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+- **Swagger API Docs**: `http://localhost:8000/docs`
+- **테스트 콘솔 웹 UI**: `http://localhost:8000/ui`
+- **상태 점검**: `http://localhost:8000/health`
+
+### 4. 테스트 슈트 실행
+
+```bash
+pytest tests/ -v
+```
+
+---
 
 ## 디렉토리 구조
 
 ```
-ai-service/
-├── orchestrator/               # Tier 3: FastAPI Orchestrator
-│   ├── main.py                 #   앱 진입점 + lifespan
-│   ├── config.py               #   환경 기반 설정
-│   ├── session.py              #   파이프라인 세션 관리
-│   ├── worker_client.py        #   Modal GPU Worker RPC 클라이언트
-│   ├── serialization.py        #   numpy/image base64 코덱
-│   └── routes/
-│       ├── avatar.py           #   Phase 1: 아바타 생성
-│       ├── wardrobe.py         #   Phase 2: 의류 분석
-│       ├── fitting.py          #   Phase 3: 가상 피팅 (5-phase)
-│       ├── viewer3d.py         #   Phase 4: 3D GLB 생성
-│       ├── visualization.py    #   렌더 결과 시각화
-│       ├── face_bank.py        #   얼굴 레퍼런스 관리
-│       ├── p2p.py              #   핏 분석 API
-│       └── quality.py          #   품질 게이트
-├── worker/                     # Tier 4: Modal GPU Worker
-│   ├── modal_app.py            #   H200 서버리스 GPU 함수
-│   └── _upload_*.py            #   모델 볼륨 업로드 유틸리티
-├── core/                       # AI 핵심 로직
-│   ├── config.py               #   모델 경로, 파이프라인 플래그
-│   ├── body_analyzer.py        #   체형 분석 + 컵 사이즈 변환
-│   ├── sw_renderer.py          #   CPU 소프트웨어 메쉬 렌더러
-│   ├── fitting.py              #   로컬 피팅 파이프라인
-│   ├── pipeline.py             #   아바타 생성 파이프라인
-│   ├── face_bank.py            #   다중 참조 얼굴 관리
-│   ├── face_identity.py        #   InsightFace 연동
-│   ├── p2p_engine.py           #   Physics-to-Prompt 엔진
-│   ├── p2p_ensemble.py         #   다중 전략 P2P 앙상블
-│   └── ...
-├── scripts/                    # 관리 스크립트
-├── tests/                      # 테스트 코드
-└── requirements.txt
+stylelen/
+├── README.md                   # 프로젝트 문서 및 결과 캡쳐
+├── .gitignore                  # Git 추적 제외 설정 (모델 가중치 및 대용량 파일 차단)
+├── docs/                       # 산출물 및 문서
+│   └── images/                 # 결과물 스크린샷 및 쇼케이스 이미지
+│       ├── test_console_ui.png
+│       ├── api_swagger_docs.png
+│       ├── avatar_3d_mesh_render.png
+│       └── p2p_fit_analysis.png
+└── ai-service/
+    ├── orchestrator/           # FastAPI 웹 서버 및 라우터
+    │   ├── main.py             # FastAPI 진입점 및 라이프사이클
+    │   ├── config.py           # 서버 설정
+    │   ├── session.py          # 세션 관리 및 이벤트 브로드캐스터
+    │   ├── serialization.py    # 이미지/NumPy/GLB 코덱
+    │   ├── worker_client.py    # 워커 클라이언트 스텁
+    │   └── routes/             # 엔드포인트 라우터
+    │       ├── avatar.py       # Phase 1: 아바타 생성 & 렌더링
+    │       ├── wardrobe.py     # Phase 2: 의류 분석
+    │       ├── fitting.py      # Phase 3: 가상 피팅
+    │       ├── viewer3d.py     # Phase 4: 3D GLB 생성
+    │       ├── visualization.py# 3D 시각화 GLB
+    │       ├── p2p.py          # Phase 5: P2P 핏 분석
+    │       ├── progress.py     # WebSocket & SSE 실시간 스트리밍
+    │       ├── face_bank.py    # 얼굴 식별 관리
+    │       └── quality.py      # 품질 검증 게이트
+    ├── core/                   # 코어 알고리즘 및 엔진
+    │   ├── body_analyzer.py    # 체형 분석 & 컵 사이즈 스케일
+    │   ├── sw_renderer.py      # NumPy 기반 CPU 3D 메쉬 렌더러
+    │   ├── p2p_engine.py       # 물리 기반 핏 분석 엔진
+    │   ├── p2p_ensemble.py     # P2P 앙상블 모듈
+    │   ├── pipeline.py         # 3D 바디 복원 파이프라인
+    │   ├── wardrobe.py         # 의류 분석 파이프라인
+    │   ├── fitting.py          # 가상 피팅 파이프라인
+    │   └── viewer3d.py         # 3D 뷰어 모델 변환
+    ├── static/                 # 웹 콘솔 UI (index.html)
+    ├── tests/                  # 유닛 및 통합 테스트 스위트 (217 tests)
+    └── requirements.txt        # 의존성 패키지 명세
 ```
