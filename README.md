@@ -134,7 +134,7 @@ python -m orchestrator.main
 | `http://localhost:8000/docs` | API 문서 |
 | `http://localhost:8000/health` | 상태 확인 |
 
-GPU 모델(PyTorch, diffusers, InsightFace 등)은 `requirements.txt`에 주석으로 남겨 두었습니다. 설치하지 않으면 해당 단계는 대체 경로로 동작합니다.
+GPU 모델(PyTorch, diffusers 등)은 `requirements.txt`에 주석으로 남겨 두었습니다. 설치하지 않으면 해당 단계는 대체 경로로 동작합니다.
 
 ### 테스트
 
