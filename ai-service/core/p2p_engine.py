@@ -73,6 +73,10 @@ class P2PResult:
     mask_expansion_factor: float = 1.0
     confidence: float = 0.0
     method: str = "fallback"  # "measured", "estimated", "fallback"
+    body_shape: str = "standard"
+    body_shape_name_ko: str = "표준 체형"
+    body_shape_info: dict = field(default_factory=dict)
+    fit_report: dict = field(default_factory=dict)
 
 
 # ── Visual Keyword Map ────────────────────────────────────────
@@ -296,11 +300,150 @@ def _classify_tightness(delta_cm: float) -> TightnessLevel:
 
 
 def _get_visual_keywords(body_part: str, tightness: TightnessLevel) -> list[str]:
-    """Get visual cue keywords for a body part at a given tightness level."""
     part_map = VISUAL_KEYWORD_MAP.get(body_part)
     if part_map is None:
         return []
     return part_map.get(tightness, [])
+
+
+def classify_body_shape(
+    body: BodyMeasurements,
+    gender: str = "female",
+) -> tuple[str, str, dict]:
+    chest = body.chest_cm
+    waist = body.waist_cm
+    hip = body.hip_cm
+    shoulder = body.shoulder_width_cm
+
+    whr = round(waist / hip, 2) if hip > 0 else 0.75
+    cwr = round(chest / waist, 2) if waist > 0 else 1.25
+
+    metrics = {
+        "whr": whr,
+        "chest_waist_ratio": cwr,
+        "shoulder_cm": round(shoulder, 1),
+        "chest_cm": round(chest, 1),
+        "waist_cm": round(waist, 1),
+        "hip_cm": round(hip, 1),
+    }
+
+    # 체형 분류 로직 수정.
+    if gender.lower() == "male":
+        if whr >= 0.95 or (waist >= chest * 0.92):
+            return "apple", "복부 집중형 (Apple/Oval)", metrics
+        elif shoulder >= 45.0 or (chest - hip >= 6.0):
+            return "inverted_triangle", "역삼각형 체형 (Athletic V-Shape)", metrics
+        elif abs(chest - hip) <= 5.0 and whr <= 0.88:
+            return "rectangle", "슬림 직사각형형 (Rectangle/Lean)", metrics
+        elif hip > chest + 3.0:
+            return "pear", "하체 발달형 (Pear/Trapezoid)", metrics
+        else:
+            return "rectangle", "표준 직사각형형 (Standard Rectangle)", metrics
+    else:
+        if whr >= 0.85 or (waist >= chest * 0.88):
+            return "apple", "원형/사과형 체형 (Apple/Round)", metrics
+        elif (hip - chest >= 5.0) and whr <= 0.80:
+            return "pear", "배형/하체 발달형 (Pear/Triangle)", metrics
+        elif (chest - hip >= 5.0) or (shoulder >= 41.0 and hip <= 92.0):
+            return "inverted_triangle", "역삼각형형 (Inverted Triangle)", metrics
+        elif whr <= 0.75 and cwr >= 1.20:
+            return "hourglass", "모래시계형 (Hourglass)", metrics
+        else:
+            return "rectangle", "직사각형/슬림 스트레이트형 (Rectangle/Column)", metrics
+
+
+def generate_fit_report(
+    body: BodyMeasurements,
+    garment: GarmentMeasurements,
+    deltas: list[BodyPartDelta],
+    body_shape_key: str,
+    body_shape_ko: str,
+    category: str = "top",
+    fit_type: str = "regular",
+) -> dict:
+    # 핏 진단 리포트 생성 추가.
+    part_evals = {}
+    tight_parts = []
+    loose_parts = []
+    optimal_parts = []
+
+    part_names_ko = {
+        "shoulder": "어깨",
+        "chest": "가슴둘레",
+        "waist": "허리둘레",
+        "hip": "엉덩이둘레",
+        "sleeve": "소매길이",
+    }
+
+    for d in deltas:
+        p_name = part_names_ko.get(d.body_part, d.body_part)
+        delta_str = f"{d.delta_cm:+.1f}cm"
+
+        if d.tightness == TightnessLevel.CRITICAL_TIGHT:
+            tight_parts.append(p_name)
+            msg = f"{p_name} 부위가 신체 치수보다 {abs(d.delta_cm):.1f}cm 작아 강한 당김과 활동성 저하가 예상됩니다."
+        elif d.tightness == TightnessLevel.TIGHT:
+            tight_parts.append(p_name)
+            msg = f"{p_name} 부위 여유분이 부족하여 슬림하게 밀착되는 핏입니다. (여유분: {delta_str})"
+        elif d.tightness == TightnessLevel.OPTIMAL:
+            optimal_parts.append(p_name)
+            msg = f"{p_name} 부위가 편안하고 이상적인 실루엣으로 안착됩니다. (여유분: {delta_str})"
+        elif d.tightness == TightnessLevel.LOOSE:
+            loose_parts.append(p_name)
+            msg = f"{p_name} 부위가 여유로운 실루엣으로 편안한 착용감을 제공합니다. (여유분: {delta_str})"
+        else:
+            loose_parts.append(p_name)
+            msg = f"{p_name} 부위에 원단 남김(주름)이 다소 발생하는 오버사이즈 핏입니다. (여유분: {delta_str})"
+
+        part_evals[d.body_part] = {
+            "name_ko": p_name,
+            "delta_cm": d.delta_cm,
+            "tightness": d.tightness.value,
+            "comment": msg,
+        }
+
+    if tight_parts and loose_parts:
+        fit_summary = (
+            f"{', '.join(tight_parts)} 부위는 밀착되나 {', '.join(loose_parts)} 부위는 여유가 있는 대비형 실루엣입니다."
+        )
+    elif tight_parts:
+        fit_summary = f"전체적으로 몸에 타이트하게 밀착되는 바디컨셔스 핏입니다. ({', '.join(tight_parts)} 주의)"
+    elif loose_parts:
+        fit_summary = f"전체적으로 여유롭고 편안한 릴랙스드 실루엣입니다. ({', '.join(loose_parts)} 여유)"
+    else:
+        fit_summary = "모든 신체 부위가 체형 비율에 자연스럽게 맞아떨어지는 최적의 스탠다드 핏입니다."
+
+    if len(tight_parts) >= 2 or any(d.tightness == TightnessLevel.CRITICAL_TIGHT for d in deltas):
+        recommended_size = "한 사이즈 크게(Size UP) 착용하시는 것을 권장합니다."
+        fit_grade = "타이트 (Size-Up 권장)"
+    elif len(loose_parts) >= 3 and not tight_parts:
+        recommended_size = "정사이즈 착용 시 오버핏이 연출되며, 슬림한 연출을 원하시면 한 사이즈 다운(Size DOWN)도 가능합니다."
+        fit_grade = "루즈핏 (정사이즈/Size-Down 가능)"
+    else:
+        recommended_size = "현재 선택된 사이즈가 체형에 가장 이상적인 정사이즈 핏입니다."
+        fit_grade = "정사이즈 적합 (Best Fit)"
+
+    styling_tips = []
+    if "hourglass" in body_shape_key:
+        styling_tips.append("허리 라인을 강조하는 벨트나 넣어 입기(Tuck-in) 스타일로 모래시계형 곡선을 살리면 매력적입니다.")
+    elif "pear" in body_shape_key:
+        styling_tips.append("상체에 볼륨감이나 포인트를 주어 골반과의 밸런스를 맞추는 코디를 추천합니다.")
+    elif "apple" in body_shape_key:
+        styling_tips.append("복부를 부드럽게 감싸는 스트레이트 드레이프 핏으로 세로 라인을 살리는 연출이 좋습니다.")
+    elif "inverted_triangle" in body_shape_key:
+        styling_tips.append("상의는 단정하게, 하의에 A라인이나 와이드 팬츠로 볼륨을 주어 균형미를 높이세요.")
+    else:
+        styling_tips.append("레이어드 룩이나 셔츠 칼라 포인트로 상하체 볼륨 밸런스를 감각적으로 연출해보세요.")
+
+    return {
+        "body_shape_type": body_shape_key,
+        "body_shape_name": body_shape_ko,
+        "fit_summary": fit_summary,
+        "fit_grade": fit_grade,
+        "recommended_size_guidance": recommended_size,
+        "part_evaluations": part_evals,
+        "styling_tips": styling_tips,
+    }
 
 
 def extract_body_measurements(
@@ -691,14 +834,30 @@ def run_p2p(
             confidence = 0.4
             method = "estimated"
 
+        # 7. Body shape classification & Korean fit analysis report
+        gender = metadata_dict.get("gender", "female")
+        category = clothing_item.analysis.category or "top"
+        fit_type = clothing_item.analysis.fit_type or "regular"
+
+        shape_key, shape_name_ko, shape_metrics = classify_body_shape(body_meas, gender)
+        fit_report = generate_fit_report(
+            body_meas, garment_meas, deltas,
+            shape_key, shape_name_ko, category, fit_type,
+        )
+
         result.deltas = deltas
         result.overall_tightness = _determine_overall_tightness(deltas)
         result.physics_prompt = physics_prompt
         result.mask_expansion_factor = mask_factor
         result.confidence = confidence
         result.method = method
+        result.body_shape = shape_key
+        result.body_shape_name_ko = shape_name_ko
+        result.body_shape_info = shape_metrics
+        result.fit_report = fit_report
 
         logger.info(f"P2P: Generated {len(deltas)} body part deltas, "
+                    f"shape={shape_key}({shape_name_ko}), "
                     f"overall={result.overall_tightness.value}, "
                     f"mask_factor={mask_factor:.2f}, "
                     f"confidence={confidence:.2f}")

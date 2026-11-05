@@ -159,6 +159,25 @@ tailwind.config = {
               </select>
             </div>
           </div>
+          <!-- 신체 치수 직접 입력 추가. -->
+          <div class="grid grid-cols-2 gap-3 pt-1 border-t border-gray-700/50">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">어깨너비 (cm)</label>
+              <input type="number" id="avatar-shoulder" name="shoulder_width_cm" value="0" min="0" step="0.1" class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">가슴둘레 (cm)</label>
+              <input type="number" id="avatar-chest" name="chest_cm" value="0" min="0" step="0.1" class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">허리둘레 (cm)</label>
+              <input type="number" id="avatar-waist" name="waist_cm" value="0" min="0" step="0.1" class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">엉덩이둘레 (cm)</label>
+              <input type="number" id="avatar-hip" name="hip_cm" value="0" min="0" step="0.1" class="w-full bg-surface-700 border border-gray-600 rounded px-3 py-2 text-sm">
+            </div>
+          </div>
         </div>
       </div>
       <!-- Action -->
@@ -428,6 +447,27 @@ tailwind.config = {
             </div>
           </div>
           <div id="p2p-body-parts" class="space-y-2"></div>
+          <!-- 핏 진단 카드 추가. -->
+          <div id="p2p-fit-card" class="mt-4 pt-3 border-t border-gray-600/50 hidden">
+            <div class="flex flex-wrap items-center gap-2 mb-3">
+              <span id="p2p-body-shape-badge" class="badge bg-brand/20 text-brand"></span>
+              <span id="p2p-fit-grade-badge" class="badge hidden"></span>
+            </div>
+            <div class="grid md:grid-cols-2 gap-3">
+              <div class="bg-surface-900 rounded-lg p-3">
+                <p class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">핏 진단 요약</p>
+                <p id="p2p-fit-summary" class="text-xs text-gray-200 leading-relaxed"></p>
+              </div>
+              <div class="bg-surface-900 rounded-lg p-3">
+                <p class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">사이즈 추천 가이드</p>
+                <p id="p2p-size-guidance" class="text-xs text-gray-200 leading-relaxed"></p>
+              </div>
+              <div class="bg-surface-900 rounded-lg p-3 md:col-span-2">
+                <p class="text-[10px] uppercase tracking-wide text-gray-500 mb-2">체형 맞춤 스타일링 팁</p>
+                <ul id="p2p-styling-tips" class="space-y-1.5"></ul>
+              </div>
+            </div>
+          </div>
         </div>
         <!-- Quality Gates -->
         <div id="phase3-gates-wrap" class="mt-4 hidden">
@@ -902,6 +942,11 @@ async function runPhase1() {
   fd.append('weight_kg', document.getElementById('avatar-weight').value);
   fd.append('bust_cup', document.getElementById('avatar-cup').value);
   fd.append('body_type', document.getElementById('avatar-body-type').value);
+  // 치수 폼 전송 추가.
+  fd.append('shoulder_width_cm', document.getElementById('avatar-shoulder').value || '0');
+  fd.append('chest_cm', document.getElementById('avatar-chest').value || '0');
+  fd.append('waist_cm', document.getElementById('avatar-waist').value || '0');
+  fd.append('hip_cm', document.getElementById('avatar-hip').value || '0');
 
   const t0 = performance.now();
   // Simulate progress
@@ -1234,8 +1279,34 @@ async function runPhase3() {
           <span class="text-gray-500 w-32 truncate text-[10px]">${(delta.visual_keywords || []).join(', ')}</span>
         </div>`;
       }).join('');
+
+      // 체형·핏 진단 카드 렌더 추가.
+      const fit = d.p2p.fit_report || {};
+      const grade = fit.fit_grade || '';
+      const gradeTone = grade.includes('타이트') ? 'bg-orange-500 text-orange-100'
+        : grade.includes('루즈') ? 'bg-cyan-500 text-cyan-100'
+        : 'bg-green-500 text-green-100';
+      const fitCardEl = document.getElementById('p2p-fit-card');
+      if (fitCardEl) {
+        fitCardEl.classList.remove('hidden');
+        document.getElementById('p2p-body-shape-badge').textContent = d.p2p.body_shape_name_ko || fit.body_shape_name || '표준 체형';
+        const gradeEl = document.getElementById('p2p-fit-grade-badge');
+        gradeEl.textContent = grade;
+        gradeEl.className = `badge ${grade ? gradeTone : 'hidden'}`;
+        document.getElementById('p2p-fit-summary').textContent = fit.fit_summary || '';
+        document.getElementById('p2p-size-guidance').textContent = fit.recommended_size_guidance || '';
+        const tipsEl = document.getElementById('p2p-styling-tips');
+        tipsEl.replaceChildren(...(Array.isArray(fit.styling_tips) ? fit.styling_tips : []).map(tip => {
+          const li = document.createElement('li');
+          li.className = 'bg-surface-800 rounded px-2.5 py-1.5 text-xs text-gray-200';
+          li.textContent = tip;
+          return li;
+        }));
+      }
     } else {
       document.getElementById('phase3-p2p-panel').classList.add('hidden');
+      const fitCardEl = document.getElementById('p2p-fit-card');
+      if (fitCardEl) fitCardEl.classList.add('hidden');
     }
 
     document.getElementById('phase3-results').classList.remove('hidden');

@@ -120,6 +120,10 @@ async def p2p_analyze(
         "session_id": session_id,
         "physics_prompt": p2p_result.physics_prompt,
         "overall_tightness": p2p_result.overall_tightness.value,
+        "body_shape": getattr(p2p_result, "body_shape", "standard"),
+        "body_shape_name_ko": getattr(p2p_result, "body_shape_name_ko", "표준 체형"),
+        "body_shape_info": getattr(p2p_result, "body_shape_info", {}),
+        "fit_report": getattr(p2p_result, "fit_report", {}),
         "deltas": [
             {
                 "body_part": d.body_part,

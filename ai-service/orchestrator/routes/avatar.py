@@ -71,6 +71,10 @@ async def avatar_generate(
     weight_kg: float = Form(65.0),
     bust_cup: str = Form(""),
     body_type: str = Form("standard"),
+    shoulder_width_cm: float = Form(0.0),
+    chest_cm: float = Form(0.0),
+    waist_cm: float = Form(0.0),
+    hip_cm: float = Form(0.0),
     session_id: str = Query("default"),
 ):
     """Phase 1: Generate 3D avatar from video or image.
@@ -96,6 +100,11 @@ async def avatar_generate(
         weight_kg=weight_kg,
         bust_cup=bust_cup,
         body_type=body_type,
+        # 신체 치수 입력값 메타데이터 반영.
+        shoulder_width_cm=shoulder_width_cm,
+        chest_cm=chest_cm,
+        waist_cm=waist_cm,
+        hip_cm=hip_cm,
     )
 
     # ── Pre-read uploads (so file handles survive fallback) ─────

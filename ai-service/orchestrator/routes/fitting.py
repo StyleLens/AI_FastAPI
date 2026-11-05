@@ -163,6 +163,10 @@ async def fitting_tryon(
         p2p_data = {
             "physics_prompt": result.p2p_result.physics_prompt,
             "overall_tightness": result.p2p_result.overall_tightness.value,
+            "body_shape": getattr(result.p2p_result, "body_shape", "standard"),
+            "body_shape_name_ko": getattr(result.p2p_result, "body_shape_name_ko", "표준 체형"),
+            "body_shape_info": getattr(result.p2p_result, "body_shape_info", {}),
+            "fit_report": getattr(result.p2p_result, "fit_report", {}),
             "mask_expansion_factor": result.p2p_result.mask_expansion_factor,
             "confidence": result.p2p_result.confidence,
             "method": result.p2p_result.method,

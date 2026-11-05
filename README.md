@@ -22,8 +22,8 @@ Swagger UI를 통해 모든 엔드포인트의 입출력 스펙과 실시간 테
 
 ![3D Body Mesh 8-Angle Renders](docs/images/avatar_3d_mesh_render.png)
 
-### 4. P2P (Physics-to-Prompt) 물리 기반 핏 분석
-신체 측정치(어깨, 가슴, 허리, 엉덩이)와 의류 실측 치수 간의 물리적 델타를 계산하여 부위별 조임 정도(Tightness)와 물리 시뮬레이션 프롬프트를 도출한다.
+### 4. P2P (Physics-to-Prompt) 신체 치수 핏 진단 및 체형 분석
+사용자가 직접 입력하거나 자동 추정된 신체 치수(어깨, 가슴, 허리, 엉덩이)와 의류 실측 치수 간의 물리적 델타를 계산하여, 5대 체형(Hourglass, Apple, Pear, Inverted Triangle, Rectangle) 자동 분류, 부위별 조임도(Tightness), 한글 맞춤 핏 총평, 사이즈 업/다운 권장 가이드, 스타일링 팁을 도출한다.
 
 ![P2P Fit Analysis](docs/images/p2p_fit_analysis.png)
 
@@ -78,9 +78,11 @@ graph TD
 
 1. **360도 가상 피팅 & 8각도 뷰**: 45도 간격의 8개 각도(0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°) 렌더링.
 2. **체형 반영 3D 메쉬 변형**: A~H 컵 사이즈별 가슴 볼륨 조절, 체질량지수(BMI) 기반 프로포션 자동 스케일링.
-3. **P2P (Physics-to-Prompt) 핏 분석**:
-   - 어깨, 가슴, 허리, 엉덩이, 소매 등 주요 부위별 실측 차이 계산.
-   - `critical_tight`, `tight`, `optimal`, `loose`, `very_loose` 5단계 핏 분류.
+3. **정밀 신체 치수 핏 분석 & 체형 진단**:
+   - 어깨너비, 가슴둘레, 허리둘레, 엉덩이둘레 직접 입력 및 세션 자동 연동.
+   - WHR(허리/엉덩이 비율) 및 가슴/허리 비율 기반 5대 체형(모래시계형, 사과형, 배형, 역삼각형, 직사각형형) 자동 분류.
+   - 부위별 델타(cm) 및 5단계 조임도(`critical_tight`, `tight`, `optimal`, `loose`, `very_loose`) 진단.
+   - 자연스러운 한국어 핏 리포트 (총평, 사이즈 UP/DOWN 가이드, 체형 맞춤 코디 팁) 생성.
    - 의류 신축성(Elasticity)에 따른 동적 마스크 확장 계수(Mask Expansion Factor) 산출.
 4. **실시간 WebSocket 스트리밍**: 각 Phase 진행 상태 및 진행률(0.0~1.0)을 클라이언트에 실시간 브로드캐스트.
 5. **독립 실행 (Standalone) CPU 모드**: 무거운 GPU 의존성 없이 표준 CPU 환경에서 전체 파이프라인과 API가 안정적으로 구동.
@@ -167,6 +169,6 @@ stylelen/
     │   ├── fitting.py          # 가상 피팅 파이프라인
     │   └── viewer3d.py         # 3D 뷰어 모델 변환
     ├── static/                 # 웹 콘솔 UI (index.html)
-    ├── tests/                  # 유닛 및 통합 테스트 스위트 (217 tests)
+    ├── tests/                  # 유닛 및 통합 테스트 스위트 (237 tests)
     └── requirements.txt        # 의존성 패키지 명세
 ```
