@@ -33,7 +33,7 @@
 ## 주요 기능
 
 ### 1. 3D 아바타 생성
-- 영상이나 사진에서 사람을 찾고(YOLO), SAM 3D Body로 3D 바디 메쉬를 복원해 GLB로 내보냅니다.
+- 다각도로 찍은 영상에서 사람을 찾고(YOLO), SAM 3D Body로 3D 바디 메쉬를 복원해 GLB로 내보냅니다.
 - 키, 몸무게, 컵 사이즈로 BMI와 가슴 볼륨을 계산해 메쉬 단면에 반영합니다.
 - 0°부터 315°까지 45도 간격 8개 각도를 CPU 소프트웨어 렌더러로 그립니다. 자세 보정, 팔 접기, 다리 모으기를 렌더 전에 적용합니다.
 
@@ -45,7 +45,6 @@
 ### 3. 8각도 가상 피팅
 - CatVTON-FLUX 또는 FASHN VTON으로 각도마다 옷을 입힙니다. 사용할 수 없으면 Gemini 이미지 생성으로 넘어갑니다.
 - 핏 진단 결과에 따라 옷 마스크를 넓히거나 줄여, 큰 옷은 여유 있게, 작은 옷은 붙게 그립니다.
-- 얼굴 사진을 최대 11장 받아 Face Bank를 만들고, 각도에 맞는 얼굴을 골라 InsightFace로 얼굴을 일관되게 유지합니다.
 
 ### 4. P2P 핏 진단
 - 어깨, 가슴, 허리, 엉덩이, 소매의 `옷 치수 - 신체 치수`를 계산해 5단계 조임도로 분류합니다.
@@ -71,14 +70,14 @@ FastAPI Orchestrator (CPU)
         │  GPU 작업만 위임 (실패 시 로컬 실행)
         ▼
 GPU Worker (Modal 서버리스)
-  └─ YOLO, SAM 3D Body, SAM3, FASHN, SDXL, FASHN VTON, InsightFace, Hunyuan3D
+  └─ YOLO, SAM 3D Body, SAM3, FASHN, SDXL, FASHN VTON, Hunyuan3D
 ```
 
 | 단계 | 하는 일 | 주요 모델 |
 |---|---|---|
 | Phase 1 Avatar | 사람 검출, 3D 메쉬 복원, 8각도 렌더 | YOLO, SAM 3D Body |
 | Phase 2 Wardrobe | 옷 분리, 부위 파싱, 속성 분석 | SAM3, FASHN Parser, Gemini |
-| Phase 3 Fitting | 8각도 가상 착용, 얼굴 유지 | CatVTON-FLUX / FASHN VTON, InsightFace |
+| Phase 3 Fitting | 8각도 가상 착용 | CatVTON-FLUX / FASHN VTON |
 | Phase 4 3D Viewer | 피팅 결과로 3D 모델 생성 | Hunyuan3D |
 | P2P | 치수 차이 계산, 체형 분류, 핏 리포트 | 규칙 엔진 + Gemini 앙상블 |
 
@@ -104,9 +103,8 @@ GPU Worker (Modal 서버리스)
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| POST | `/avatar/generate` | 영상·사진과 체형 정보로 아바타 생성 |
+| POST | `/avatar/generate` | 다각도 영상과 체형 정보로 아바타 생성 |
 | POST | `/wardrobe/add-images` | 옷 사진, 사이즈표, 상품 정보 분석 |
-| POST | `/face-bank/upload` | 얼굴 참조 사진 등록 |
 | POST | `/fitting/try-on` | 8각도 가상 피팅 |
 | POST | `/p2p/analyze` | 핏 진단과 한국어 리포트 |
 | POST | `/viewer3d/generate` | 3D GLB 생성 |
@@ -151,7 +149,7 @@ pytest tests/ -v   # 237개
 ```
 ai-service/
 ├── orchestrator/   FastAPI 진입점, 세션, 직렬화, 워커 클라이언트, 라우터
-├── core/           아바타, 의류, 피팅, 3D, P2P, Face Bank 파이프라인
+├── core/           아바타, 의류, 피팅, 3D, P2P 파이프라인
 ├── static/         테스트 콘솔 (Three.js 뷰어 포함)
 ├── tests/          단위·통합 테스트
 └── docs/           파이프라인, API, 모델 명세
