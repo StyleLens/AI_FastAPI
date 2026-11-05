@@ -1,174 +1,158 @@
-# StyleLens AI FastAPI Server — 360도 가상 피팅 & 3D 체형 분석 시스템
+<h1 align="center">$\bf{\large{\color{#6580DD} StyleLens AI Server }}$</h1>
 
-사용자 사진 한 장에서 3D 바디 메쉬를 복원하고, 8개 각도(0°~315°)의 가상 피팅 및 물리 기반 핏(P2P, Physics-to-Prompt) 분석을 제공하는 고성능 AI FastAPI 서버이다.
-CPU 기반 독립 실행(Standalone) 및 실시간 WebSocket 진행률 스트리밍을 지원한다.
+**사진과 체형 정보로 3D 아바타를 만들고, 고른 옷을 8개 각도로 입혀 보여 주는 가상 피팅 AI 서버입니다.**
 
----
+신체 치수와 옷 치수의 차이를 부위별로 계산해 핏을 진단하고, 그 결과를 피팅 이미지 생성에도 반영합니다. 전체 파이프라인은 FastAPI 오케스트레이터가 조율하며, GPU가 필요한 모델은 원격 워커로 분리해 GPU가 없을 때도 CPU만으로 서버가 동작합니다.
 
-## 주요 화면 및 결과물
+![StyleLens 테스트 콘솔](docs/images/test_console_ui.png)
 
-### 1. 테스트 콘솔 웹 UI (`/ui`)
-브라우저에서 직접 아바타 생성, 의류 분석, 8각도 피팅, 3D 뷰어, P2P 핏 분석을 단계별로 테스트할 수 있는 대화형 콘솔이다.
+<hr>
 
-![StyleLens Test Console UI](docs/images/test_console_ui.png)
+## 개발 환경
 
-### 2. FastAPI 대화형 API 문서 (`/docs`)
-Swagger UI를 통해 모든 엔드포인트의 입출력 스펙과 실시간 테스트를 지원한다.
+### Language
+![Python](https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)
+![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
 
-![StyleLens Swagger Docs](docs/images/api_swagger_docs.png)
+### Framework & Runtime
+![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
+![Three.js](https://img.shields.io/badge/Three.js-000000?style=for-the-badge&logo=threedotjs&logoColor=white)
 
-### 3. 3D 바디 메쉬 8각도 렌더링 (0° ~ 315°)
-사용자의 신체 메타데이터(키, 몸무게, 컵 사이즈, 체형)를 반영하여 CPU 소프트웨어 렌더러로 생성한 8개 각도의 Depth 맵과 3D GLB 아바타 메쉬이다.
+### AI & Model
+![Gemini](https://img.shields.io/badge/Gemini-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white)
+![Hugging Face](https://img.shields.io/badge/Hugging_Face-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)
+![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?style=for-the-badge&logo=opencv&logoColor=white)
 
-![3D Body Mesh 8-Angle Renders](docs/images/avatar_3d_mesh_render.png)
+### Infra
+![Modal](https://img.shields.io/badge/Modal-7FEE64?style=for-the-badge&logo=modal&logoColor=black)
+![NVIDIA](https://img.shields.io/badge/GPU_Serving-76B900?style=for-the-badge&logo=nvidia&logoColor=white)
 
-### 4. P2P (Physics-to-Prompt) 신체 치수 핏 진단 및 체형 분석
-사용자가 직접 입력하거나 자동 추정된 신체 치수(어깨, 가슴, 허리, 엉덩이)와 의류 실측 치수 간의 물리적 델타를 계산하여, 5대 체형(Hourglass, Apple, Pear, Inverted Triangle, Rectangle) 자동 분류, 부위별 조임도(Tightness), 한글 맞춤 핏 총평, 사이즈 업/다운 권장 가이드, 스타일링 팁을 도출한다.
-
-![P2P Fit Analysis](docs/images/p2p_fit_analysis.png)
-
----
-
-## 시스템 아키텍처
-
-```
-Frontend (React 19 + Three.js)
-    │
-    ▼ (REST / WebSocket)
-FastAPI Orchestrator (CPU / PyTorch / Trimesh)
-    ├── Phase 1: 아바타 생성 (3D 메쉬 복원 & 8각도 렌더링, GLB 생성)
-    ├── Phase 2: 의류 분석 (SAM3 마스킹 & FASHN 파싱)
-    ├── Phase 3: 가상 피팅 (8각도 착용 시각화)
-    ├── Phase 4: 3D 뷰어 (Trimesh 3D GLB 내보내기)
-    ├── Phase 5: P2P 물리 기반 핏 분석 엔진
-    └── WebSocket: 실시간 파이프라인 진행률 스트리밍 (/ws/progress)
-```
-
----
-
-## 파이프라인 흐름
-
-```mermaid
-graph TD
-    A["사용자 사진 / 체형 정보"] --> B["Phase 1: 3D 메쉬 생성"]
-    B --> C["Phase 1R: CPU 8각도 Depth 렌더링 (0°~315°)"]
-    D["의류 이미지 / 사이즈 차트"] --> E["Phase 2: 의류 세그멘테이션 & 분석"]
-    C --> F["Phase 3: 8각도 가상 피팅"]
-    E --> F
-    B --> G["Phase 5: P2P 물리 핏 분석"]
-    E --> G
-    F --> H["Phase 4: 3D GLB 뷰어 모델"]
-    G --> H
-    F --> I["최종 피팅 결과 및 핏 리포트"]
-```
-
-| Phase | 설명 | 세부 구현 |
-|-------|------|----------|
-| **Phase 1: Avatar** | 사용자 신체 스펙 반영 3D 메쉬 복원 | Trimesh + 체형 변형(컵 사이즈, 어깨 보정) |
-| **Phase 1R: Render** | 8개 각도 소프트웨어 렌더링 | NumPy 기반 CPU Depth 렌더러 (0° ~ 315°) |
-| **Phase 2: Wardrobe** | 의류 마스크 및 카테고리/소재 분석 | SAM3 분할 + FASHN 파싱 (휴리스틱 Fallback 지원) |
-| **Phase 3: Fitting** | 8각도 가상 피팅 이미지 생성 | 8각도 실루엣 정합 및 착용 시각화 |
-| **Phase 4: Viewer3D** | 3D 웹 뷰어용 바이너리 생성 | 표준 GLTF/GLB 포맷 바이너리 다운로드 |
-| **Phase 5: P2P Engine** | 물리 기반 치수 차이 핏 분석 | 신체-의류 치수 차이(Delta), 조임도 분류, 마스크 신축 보정 |
-| **Progress WS** | 실시간 파이프라인 진행 상황 전송 | WebSocket (`/ws/progress/{session_id}`) & SSE |
-
----
+<hr>
 
 ## 주요 기능
 
-1. **360도 가상 피팅 & 8각도 뷰**: 45도 간격의 8개 각도(0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°) 렌더링.
-2. **체형 반영 3D 메쉬 변형**: A~H 컵 사이즈별 가슴 볼륨 조절, 체질량지수(BMI) 기반 프로포션 자동 스케일링.
-3. **정밀 신체 치수 핏 분석 & 체형 진단**:
-   - 어깨너비, 가슴둘레, 허리둘레, 엉덩이둘레 직접 입력 및 세션 자동 연동.
-   - WHR(허리/엉덩이 비율) 및 가슴/허리 비율 기반 5대 체형(모래시계형, 사과형, 배형, 역삼각형, 직사각형형) 자동 분류.
-   - 부위별 델타(cm) 및 5단계 조임도(`critical_tight`, `tight`, `optimal`, `loose`, `very_loose`) 진단.
-   - 자연스러운 한국어 핏 리포트 (총평, 사이즈 UP/DOWN 가이드, 체형 맞춤 코디 팁) 생성.
-   - 의류 신축성(Elasticity)에 따른 동적 마스크 확장 계수(Mask Expansion Factor) 산출.
-4. **실시간 WebSocket 스트리밍**: 각 Phase 진행 상태 및 진행률(0.0~1.0)을 클라이언트에 실시간 브로드캐스트.
-5. **독립 실행 (Standalone) CPU 모드**: 무거운 GPU 의존성 없이 표준 CPU 환경에서 전체 파이프라인과 API가 안정적으로 구동.
+### 1. 3D 아바타 생성
+- 영상이나 사진에서 사람을 찾고(YOLO), SAM 3D Body로 3D 바디 메쉬를 복원해 GLB로 내보냅니다.
+- 키, 몸무게, 컵 사이즈로 BMI와 가슴 볼륨을 계산해 메쉬 단면에 반영합니다.
+- 0°부터 315°까지 45도 간격 8개 각도를 CPU 소프트웨어 렌더러로 그립니다. 자세 보정, 팔 접기, 다리 모으기를 렌더 전에 적용합니다.
 
----
+### 2. 의류 분석
+- SAM3로 옷 영역을 분리하고, FASHN 파서로 18개 부위(상의, 하의, 팔, 다리 등)를 나눕니다.
+- Gemini가 색상, 소재, 핏, 넥라인, 신축성 같은 속성을 뽑습니다. 여러 장을 올리면 정면, 측면, 디테일 사진을 우선순위로 합칩니다.
+- 사이즈표에서 가슴·허리·엉덩이 값이 단면(반둘레)인지 판정해 둘레로 바꿉니다.
 
-## 실행 방법
+### 3. 8각도 가상 피팅
+- CatVTON-FLUX 또는 FASHN VTON으로 각도마다 옷을 입힙니다. 사용할 수 없으면 Gemini 이미지 생성으로 넘어갑니다.
+- 핏 진단 결과에 따라 옷 마스크를 넓히거나 줄여, 큰 옷은 여유 있게, 작은 옷은 붙게 그립니다.
+- 얼굴 사진을 최대 11장 받아 Face Bank를 만들고, 각도에 맞는 얼굴을 골라 InsightFace로 얼굴을 일관되게 유지합니다.
 
-### 1. 가상환경 구성 및 패키지 설치
+### 4. P2P 핏 진단
+- 어깨, 가슴, 허리, 엉덩이, 소매의 `옷 치수 - 신체 치수`를 계산해 5단계 조임도로 분류합니다.
+- 허리·엉덩이 비율과 가슴·허리 비율로 체형을 5가지(모래시계형, 사과형, 배형, 역삼각형, 직사각형)로 나눕니다.
+- 부위별 진단, 사이즈 업·다운 권장, 체형별 코디 팁을 한국어 리포트로 돌려줍니다.
+
+### 5. 3D 뷰어와 실시간 진행률
+- 피팅 결과로 Hunyuan3D GLB를 만들고, 웹 콘솔의 Three.js 뷰어에서 돌려 볼 수 있습니다.
+- 각 단계의 진행률을 WebSocket과 SSE로 실시간 전송합니다.
+
+<hr>
+
+## 아키텍처
+
+```
+Web Console (HTML + Three.js)
+        │  REST / WebSocket / SSE
+        ▼
+FastAPI Orchestrator (CPU)
+  ├─ 세션 관리, 진행률 브로드캐스트
+  ├─ 메쉬 렌더링, GLB 패킹, P2P 핏 진단
+  └─ Gemini 의류·체형 분석
+        │  GPU 작업만 위임 (실패 시 로컬 실행)
+        ▼
+GPU Worker (Modal 서버리스)
+  └─ YOLO, SAM 3D Body, SAM3, FASHN, SDXL, FASHN VTON, InsightFace, Hunyuan3D
+```
+
+| 단계 | 하는 일 | 주요 모델 |
+|---|---|---|
+| Phase 1 Avatar | 사람 검출, 3D 메쉬 복원, 8각도 렌더 | YOLO, SAM 3D Body |
+| Phase 2 Wardrobe | 옷 분리, 부위 파싱, 속성 분석 | SAM3, FASHN Parser, Gemini |
+| Phase 3 Fitting | 8각도 가상 착용, 얼굴 유지 | CatVTON-FLUX / FASHN VTON, InsightFace |
+| Phase 4 3D Viewer | 피팅 결과로 3D 모델 생성 | Hunyuan3D |
+| P2P | 치수 차이 계산, 체형 분류, 핏 리포트 | 규칙 엔진 + Gemini 앙상블 |
+
+<hr>
+
+## P2P 핏 진단
+
+![P2P 핏 진단](docs/images/p2p_fit_analysis.png)
+
+신체 치수는 직접 입력한 값을 먼저 쓰고, 없으면 키와 몸무게로 추정합니다. 옷 치수는 사이즈표, 피팅 모델 정보, 카테고리별 기본값 순서로 찾습니다.
+
+| 조임도 | 기준 (옷 - 몸) |
+|---|---|
+| critical_tight | -5cm 미만 |
+| tight | -5cm 이상 -2cm 미만 |
+| optimal | -2cm 이상 +5cm 미만 |
+| loose | +5cm 이상 +10cm 미만 |
+| very_loose | +10cm 이상 |
+
+<hr>
+
+## API
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| POST | `/avatar/generate` | 영상·사진과 체형 정보로 아바타 생성 |
+| POST | `/wardrobe/add-images` | 옷 사진, 사이즈표, 상품 정보 분석 |
+| POST | `/face-bank/upload` | 얼굴 참조 사진 등록 |
+| POST | `/fitting/try-on` | 8각도 가상 피팅 |
+| POST | `/p2p/analyze` | 핏 진단과 한국어 리포트 |
+| POST | `/viewer3d/generate` | 3D GLB 생성 |
+| WS | `/ws/progress/{session_id}` | 실시간 진행률 |
+
+전체 명세는 서버 실행 후 `/docs`에서 볼 수 있습니다.
+
+<img src="docs/images/api_swagger_docs.png" alt="Swagger API 문서" width="640">
+
+<hr>
+
+## 설치 및 실행
 
 ```bash
 cd ai-service
-
-# Python 3.11+ 권장
 python3 -m venv .venv
 source .venv/bin/activate
-
 pip install -r requirements.txt
-```
 
-### 2. 환경 변수 설정 (선택 사항)
-
-```bash
-cp .env.example .env
-# Gemini API 키 필요 시 설정 (미설정 시 자체 휴리스틱 엔진으로 자동 동작)
-```
-
-### 3. FastAPI 서버 실행
-
-```bash
+cp .env.example .env   # Gemini API 키 설정 (선택)
 python -m orchestrator.main
-# 또는
-uvicorn orchestrator.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-- **Swagger API Docs**: `http://localhost:8000/docs`
-- **테스트 콘솔 웹 UI**: `http://localhost:8000/ui`
-- **상태 점검**: `http://localhost:8000/health`
+| 주소 | 내용 |
+|---|---|
+| `http://localhost:8000/ui` | 테스트 콘솔 |
+| `http://localhost:8000/docs` | API 문서 |
+| `http://localhost:8000/health` | 상태 확인 |
 
-### 4. 테스트 슈트 실행
+GPU 모델(PyTorch, diffusers, InsightFace 등)은 `requirements.txt`에 주석으로 남겨 두었습니다. 설치하지 않으면 해당 단계는 대체 경로로 동작합니다.
+
+### 테스트
 
 ```bash
-pytest tests/ -v
+pytest tests/ -v   # 237개
 ```
 
----
+<hr>
 
 ## 디렉토리 구조
 
 ```
-stylelen/
-├── README.md                   # 프로젝트 문서 및 결과 캡쳐
-├── .gitignore                  # Git 추적 제외 설정 (모델 가중치 및 대용량 파일 차단)
-├── docs/                       # 산출물 및 문서
-│   └── images/                 # 결과물 스크린샷 및 쇼케이스 이미지
-│       ├── test_console_ui.png
-│       ├── api_swagger_docs.png
-│       ├── avatar_3d_mesh_render.png
-│       └── p2p_fit_analysis.png
-└── ai-service/
-    ├── orchestrator/           # FastAPI 웹 서버 및 라우터
-    │   ├── main.py             # FastAPI 진입점 및 라이프사이클
-    │   ├── config.py           # 서버 설정
-    │   ├── session.py          # 세션 관리 및 이벤트 브로드캐스터
-    │   ├── serialization.py    # 이미지/NumPy/GLB 코덱
-    │   ├── worker_client.py    # 워커 클라이언트 스텁
-    │   └── routes/             # 엔드포인트 라우터
-    │       ├── avatar.py       # Phase 1: 아바타 생성 & 렌더링
-    │       ├── wardrobe.py     # Phase 2: 의류 분석
-    │       ├── fitting.py      # Phase 3: 가상 피팅
-    │       ├── viewer3d.py     # Phase 4: 3D GLB 생성
-    │       ├── visualization.py# 3D 시각화 GLB
-    │       ├── p2p.py          # Phase 5: P2P 핏 분석
-    │       ├── progress.py     # WebSocket & SSE 실시간 스트리밍
-    │       ├── face_bank.py    # 얼굴 식별 관리
-    │       └── quality.py      # 품질 검증 게이트
-    ├── core/                   # 코어 알고리즘 및 엔진
-    │   ├── body_analyzer.py    # 체형 분석 & 컵 사이즈 스케일
-    │   ├── sw_renderer.py      # NumPy 기반 CPU 3D 메쉬 렌더러
-    │   ├── p2p_engine.py       # 물리 기반 핏 분석 엔진
-    │   ├── p2p_ensemble.py     # P2P 앙상블 모듈
-    │   ├── pipeline.py         # 3D 바디 복원 파이프라인
-    │   ├── wardrobe.py         # 의류 분석 파이프라인
-    │   ├── fitting.py          # 가상 피팅 파이프라인
-    │   └── viewer3d.py         # 3D 뷰어 모델 변환
-    ├── static/                 # 웹 콘솔 UI (index.html)
-    ├── tests/                  # 유닛 및 통합 테스트 스위트 (237 tests)
-    └── requirements.txt        # 의존성 패키지 명세
+ai-service/
+├── orchestrator/   FastAPI 진입점, 세션, 직렬화, 워커 클라이언트, 라우터
+├── core/           아바타, 의류, 피팅, 3D, P2P, Face Bank 파이프라인
+├── static/         테스트 콘솔 (Three.js 뷰어 포함)
+├── tests/          단위·통합 테스트
+└── docs/           파이프라인, API, 모델 명세
 ```
